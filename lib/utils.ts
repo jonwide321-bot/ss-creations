@@ -1,4 +1,3 @@
-
 export const formatPrice = (amount: number): string => {
   return "Rs. " + amount.toLocaleString('en-LK', {
     minimumFractionDigits: 2,

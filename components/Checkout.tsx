@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { ArrowLeft, CreditCard, Truck, Wallet, CheckCircle, Tag, ShieldCheck, MapPin, Lock, Loader2, Sparkles } from 'lucide-react';
+import { ArrowLeft, CreditCard, Truck, Wallet, CheckCircle, Tag, ShieldCheck, MapPin, Lock, Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import { CartItem, Coupon, StoreSettings, ShippingRate } from '../types';
 import { formatPrice } from '../lib/utils';
 import { db } from '../lib/supabase';
@@ -30,7 +30,12 @@ const Checkout: React.FC<CheckoutProps> = ({ items, coupons, settings, onBack, o
   });
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
   const [couponCode, setCouponCode] = useState('');
-  const [activeCoupon, setActiveCoupon] = useState<Coupon | null>(null);
+  
+  // State for the validated coupon details
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [discountAmount, setDiscountAmount] = useState(0);
+  const [couponError, setCouponError] = useState<string | null>(null);
+
   const [paymentMethod, setPaymentMethod] = useState('card');
   const [isProcessing, setIsProcessing] = useState(false);
   const [validatingCoupon, setValidatingCoupon] = useState(false);
@@ -63,25 +68,30 @@ const Checkout: React.FC<CheckoutProps> = ({ items, coupons, settings, onBack, o
     return form.city === 'Colombo' ? 350 : 500;
   }, [items, form.city, shippingRates]);
 
-  const discount = useMemo(() => {
-    if (!activeCoupon) return 0;
-    return subtotal * (activeCoupon.discount_percent / 100);
-  }, [activeCoupon, subtotal]);
+  const total = subtotal + shippingFee - discountAmount;
 
-  const total = subtotal + shippingFee - discount;
-
-  const handleApplyCoupon = () => {
+  const handleApplyCoupon = async () => {
+    if (!couponCode.trim()) return;
+    
     setValidatingCoupon(true);
-    setTimeout(() => {
-      const found = coupons.find(c => c.code.toUpperCase() === couponCode.trim().toUpperCase() && c.active);
-      if (found) {
-        setActiveCoupon(found);
+    setCouponError(null);
+    setAppliedCoupon(null);
+    setDiscountAmount(0);
+
+    try {
+      const result = await db.coupons.validate(couponCode.trim(), subtotal);
+      
+      if (result.success) {
+        setAppliedCoupon(result.coupon);
+        setDiscountAmount(result.discountAmount);
       } else {
-        alert('Invalid or expired coupon');
-        setActiveCoupon(null);
+        setCouponError(result.message || 'Invalid coupon');
       }
+    } catch (err) {
+      setCouponError('Error validating coupon');
+    } finally {
       setValidatingCoupon(false);
-    }, 800);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -102,7 +112,7 @@ const Checkout: React.FC<CheckoutProps> = ({ items, coupons, settings, onBack, o
         total,
         subtotal,
         shippingFee,
-        discount,
+        discount: discountAmount,
         shippingAddress: form,
         paymentMethod: paymentMethod === 'card' ? 'Visa/Master' : paymentMethod === 'cod' ? 'Cash on Delivery' : 'Bank Transfer',
         date: new Date().toLocaleDateString(),
@@ -206,12 +216,28 @@ const Checkout: React.FC<CheckoutProps> = ({ items, coupons, settings, onBack, o
 
               <div className="mb-8 pt-4 border-t border-white/10">
                 <div className="flex gap-2">
-                  <input type="text" placeholder="Promo Code" className="flex-grow px-4 py-3 text-xs rounded-xl bg-white/5 border border-white/10 outline-none text-white" value={couponCode} onChange={e => setCouponCode(e.target.value)} />
+                  <input type="text" placeholder="Promo Code" className="flex-grow px-4 py-3 text-xs rounded-xl bg-white/5 border border-white/10 outline-none text-white uppercase" value={couponCode} onChange={e => setCouponCode(e.target.value)} />
                   <button onClick={handleApplyCoupon} disabled={validatingCoupon} className="bg-[#D4AF37] text-white px-5 py-3 rounded-xl text-[10px] font-bold hover:bg-[#B8860B] disabled:opacity-50 uppercase tracking-widest">
                     {validatingCoupon ? <Loader2 className="w-3 h-3 animate-spin mx-auto" /> : 'Apply'}
                   </button>
                 </div>
-                {activeCoupon && <p className="text-[9px] text-[#D4AF37] mt-3 uppercase tracking-widest font-bold">✓ Coupon Applied</p>}
+                
+                {appliedCoupon && (
+                   <div className="mt-3 p-3 bg-[#D4AF37]/10 rounded-xl border border-[#D4AF37]/20 flex items-start gap-2">
+                     <CheckCircle className="w-3 h-3 text-[#D4AF37] mt-0.5" />
+                     <div>
+                       <p className="text-[10px] text-[#D4AF37] uppercase tracking-widest font-bold">Coupon Applied</p>
+                       <p className="text-[10px] text-stone-400">Code: {appliedCoupon.code}</p>
+                     </div>
+                   </div>
+                )}
+                
+                {couponError && (
+                   <div className="mt-3 p-3 bg-rose-500/10 rounded-xl border border-rose-500/20 flex items-center gap-2">
+                     <AlertCircle className="w-3 h-3 text-rose-400" />
+                     <p className="text-[10px] text-rose-400 font-bold">{couponError}</p>
+                   </div>
+                )}
               </div>
 
               <div className="space-y-3 mb-10">
@@ -222,7 +248,7 @@ const Checkout: React.FC<CheckoutProps> = ({ items, coupons, settings, onBack, o
                     {shippingFee === 0 ? 'FREE' : formatPrice(shippingFee)}
                   </span>
                 </div>
-                {discount > 0 && <div className="flex justify-between text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest"><span>Membership Discount</span><span>-{formatPrice(discount)}</span></div>}
+                {discountAmount > 0 && <div className="flex justify-between text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest"><span>Discount</span><span>-{formatPrice(discountAmount)}</span></div>}
                 <div className="flex justify-between text-2xl font-bold pt-6 border-t border-white/10 text-white serif italic"><span>Total</span><span className="text-[#D4AF37]">{formatPrice(total)}</span></div>
               </div>
 

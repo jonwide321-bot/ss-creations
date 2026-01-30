@@ -1,7 +1,8 @@
+
 import React, { useState, useEffect } from 'react';
 import { Lock, Mail, LogIn, ArrowLeft, Loader2, AlertTriangle, Info } from 'lucide-react';
 import Logo from '../Logo';
-import { supabase, isSupabaseConfigured, isStripeKeyError } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 
 interface AdminLoginProps {
   onBack: () => void;
@@ -13,11 +14,9 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onBack }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [isConfigured, setIsConfigured] = useState(true);
-  const [stripeWarning, setStripeWarning] = useState(false);
 
   useEffect(() => {
     setIsConfigured(!!isSupabaseConfigured());
-    setStripeWarning(!!isStripeKeyError());
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -80,18 +79,6 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onBack }) => {
             Make sure you have created an admin account in your <b>Supabase Dashboard</b> under Authentication / Users first.
           </p>
         </div>
-
-        {stripeWarning && (
-          <div className="mb-8 p-4 bg-amber-50 border border-amber-100 rounded-2xl flex gap-3">
-            <AlertTriangle className="w-6 h-6 text-amber-500 flex-shrink-0" />
-            <div>
-              <p className="text-xs font-bold text-amber-600 uppercase tracking-widest mb-1">Configuration Warning</p>
-              <p className="text-[10px] text-amber-600 leading-relaxed">
-                The provided key format might be incorrect for Supabase. If login fails, please ensure you are using the <b>anon public</b> key from your Supabase Dashboard.
-              </p>
-            </div>
-          </div>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-2">

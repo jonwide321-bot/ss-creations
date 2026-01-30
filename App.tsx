@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import ProductCard from './components/ProductCard';
@@ -22,10 +22,9 @@ import Loader from './components/Loader';
 import { SkeletonGrid } from './components/ProductSkeleton';
 import Logo from './components/Logo';
 import { testimonials } from './data';
-import { Product, CartItem, OrderDetails, OrderStatus, StoreSettings, Coupon } from './types';
-import { Settings, Filter, AlertCircle, Heart } from 'lucide-react';
+import { Product, CartItem, OrderDetails, StoreSettings, Coupon, Promotion } from './types';
+import { Filter, Heart, AlertCircle, Facebook, Instagram, MessageCircle, MapPin, Phone, Mail } from 'lucide-react';
 import { supabase, db } from './lib/supabase';
-import { formatPrice } from './lib/utils';
 
 type View = 'catalog' | 'detail' | 'checkout' | 'success' | 'admin_login' | 'admin_dashboard' | 'track-order' | 'returns' | 'delivery' | 'contact' | 'wishlist';
 type SortOption = 'newest' | 'price-low' | 'price-high';
@@ -34,13 +33,12 @@ const App: React.FC = () => {
   const [productsState, setProductsState] = useState<Product[]>([]);
   const [orders, setOrders] = useState<OrderDetails[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [settings, setSettings] = useState<StoreSettings>({ baseShippingFee: 500.00 });
   
-  const [isInitialMount, setIsInitialMount] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showSplash, setShowSplash] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(false);
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [wishlist, setWishlist] = useState<string[]>([]);
@@ -60,72 +58,61 @@ const App: React.FC = () => {
     return id;
   }, []);
 
-  const loadData = async (isSilent = false) => {
+  const loadData = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     try {
-      const [fetchedProducts, fetchedSettings, fetchedOrders, fetchedCoupons, fetchedWishlist] = await Promise.all([
+      const results = await Promise.allSettled([
         db.products.getAll(),
         db.settings.get(),
         db.orders.getAll(),
         db.coupons.getAll(),
-        db.wishlist.get(visitorId)
+        db.wishlist.get(visitorId),
+        db.promotions.getAll()
       ]);
+
+      const [p, s, o, c, w, pr] = results.map(r => r.status === 'fulfilled' ? r.value : null);
+
+      if (p) setProductsState(p);
+      if (s) setSettings(s);
+      if (o) setOrders(o);
+      if (c) setCoupons(c);
+      if (w) setWishlist(w);
+      if (pr) setPromotions(pr);
       
-      setProductsState(fetchedProducts);
-      setSettings(fetchedSettings);
-      setOrders(fetchedOrders);
-      setCoupons(fetchedCoupons);
-      setWishlist(fetchedWishlist);
-      setError(null);
-    } catch (err) {
-      console.error("Data fetch error:", err);
-      setError("Unable to connect to the store database.");
+      setLoadError(null);
+    } catch (err: any) {
+      console.error("Critical Sync Error:", err);
+      if (!isSilent) setLoadError("Unable to connect to the studio. Please check your internet connection.");
     } finally {
-      if (!isSilent) {
-        setLoading(false);
-        if (isInitialMount) {
-          setTimeout(() => {
-            setShowSplash(false);
-            setIsInitialMount(false);
-          }, 5500);
-        }
-      }
+      setLoading(false);
     }
-  };
+  }, [visitorId]);
 
   useEffect(() => {
-    loadData();
+    // Fail-safe: Always hide splash after a maximum of 4 seconds
+    const splashTimeout = setTimeout(() => {
+      setShowSplash(false);
+    }, 4000);
+
+    const init = async () => {
+      await loadData();
+      // If data loads faster than 4s, hide splash earlier
+      setTimeout(() => setShowSplash(false), 500);
+    };
+
+    init();
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      const loggedIn = !!session;
-      setIsAdminLoggedIn(loggedIn);
+      setIsAdminLoggedIn(!!session);
       if (event === 'SIGNED_IN') setCurrentView('admin_dashboard');
-      else if (event === 'SIGNED_OUT') setCurrentView('catalog');
+      if (event === 'SIGNED_OUT') setCurrentView('catalog');
     });
-    return () => subscription.unsubscribe();
-  }, []);
 
-  const sortedProducts = useMemo(() => {
-    let filtered = activeCategory === 'All' 
-      ? productsState 
-      : productsState.filter(p => p.category === activeCategory);
-    switch (sortOrder) {
-      case 'price-low': return [...filtered].sort((a, b) => a.price - b.price);
-      case 'price-high': return [...filtered].sort((a, b) => b.price - a.price);
-      default: return filtered;
-    }
-  }, [productsState, activeCategory, sortOrder]);
-
-  const cartTotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const cartCount = cartItems.reduce((acc, i) => acc + i.quantity, 0);
-
-  const handleAddToCart = (product: Product) => {
-    setCartItems(prev => {
-      const existing = prev.find(item => item.id === product.id);
-      if (existing) return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
-      return [...prev, { ...product, quantity: 1 }];
-    });
-    setIsCartOpen(true);
-  };
+    return () => {
+      clearTimeout(splashTimeout);
+      subscription.unsubscribe();
+    };
+  }, [loadData]);
 
   const toggleWishlist = async (id: string) => {
     const isAdded = wishlist.includes(id);
@@ -138,195 +125,188 @@ const App: React.FC = () => {
     }
   };
 
-  const navigateToHome = () => {
-    setSelectedProduct(null);
-    setCurrentView('catalog');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  const sortedProducts = useMemo(() => {
+    let filtered = activeCategory === 'All' ? productsState : productsState.filter(p => p.category === activeCategory);
+    if (sortOrder === 'price-low') return [...filtered].sort((a, b) => a.price - b.price);
+    if (sortOrder === 'price-high') return [...filtered].sort((a, b) => b.price - a.price);
+    return filtered;
+  }, [productsState, activeCategory, sortOrder]);
+
+  const handleAddToCart = (product: Product) => {
+    setCartItems(prev => {
+      const existing = prev.find(item => item.id === product.id);
+      if (existing) return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
+      return [...prev, { ...product, quantity: 1 }];
+    });
+    setIsCartOpen(true);
   };
 
+  const navigateToHome = () => { setSelectedProduct(null); setCurrentView('catalog'); window.scrollTo(0, 0); };
+
+  const cartTotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const cartCount = cartItems.reduce((acc, i) => acc + i.quantity, 0);
+
   const renderContent = () => {
-    if (error && currentView === 'catalog') {
-      return (
-        <div className="min-h-screen flex flex-col items-center justify-center p-4">
-          <AlertCircle className="w-12 h-12 text-rose-500 mb-4" />
-          <h2 className="text-xl font-bold text-slate-800 mb-2">Store Offline</h2>
-          <p className="text-slate-500 text-center mb-6">{error}</p>
-          <button onClick={() => window.location.reload()} className="px-6 py-3 bg-slate-900 text-white rounded-xl font-bold">Try Again</button>
+    if (loadError && productsState.length === 0) return (
+      <div className="min-h-screen flex items-center justify-center p-6 text-center">
+        <div className="bg-white p-12 rounded-[3rem] shadow-xl border border-stone-100 max-w-md">
+          <AlertCircle className="w-16 h-16 text-rose-500 mx-auto mb-6" />
+          <h2 className="text-2xl font-bold mb-4 serif">Connection Error</h2>
+          <p className="text-slate-500 mb-8">{loadError}</p>
+          <button onClick={() => { setLoadError(null); loadData(); }} className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-bold">Try Re-sync</button>
         </div>
-      );
-    }
+      </div>
+    );
 
     if (currentView === 'admin_login') return <AdminLogin onBack={navigateToHome} />;
-    if (currentView === 'admin_dashboard') return <AdminDashboard products={productsState} orders={orders} coupons={coupons} settings={settings} onUpdateProduct={async (p) => { await db.products.upsert(p); await loadData(true); }} onAddProduct={async (p) => { await db.products.upsert(p); await loadData(true); }} onDeleteProduct={async (id) => { await db.products.delete(id); await loadData(true); }} onUpdateOrderStatus={async (id, s) => { await db.orders.updateStatus(id, s); await loadData(true); }} onUpdateSettings={async (s) => { await db.settings.update(s); setSettings(s); }} onAddCoupon={async (c) => { await db.coupons.create(c); await loadData(true); }} onDeleteCoupon={async (id) => { await db.coupons.delete(id); await loadData(true); }} onToggleCoupon={async (id, active) => { await db.coupons.toggleActive(id, active); await loadData(true); }} />;
+    if (currentView === 'admin_dashboard') return (
+      <AdminDashboard 
+        products={productsState} orders={orders} coupons={coupons} promotions={promotions} settings={settings}
+        onUpdateProduct={async p => { await db.products.upsert(p); await loadData(true); }}
+        onAddProduct={async p => { await db.products.upsert(p); await loadData(true); }}
+        onDeleteProduct={async id => { await db.products.delete(id); await loadData(true); }}
+        onUpdateOrderStatus={async (id, s) => { await db.orders.updateStatus(id, s); await loadData(true); }}
+        onUpdateSettings={async s => { await db.settings.update(s); setSettings(s); }}
+        onAddCoupon={async c => { await db.coupons.create(c); await loadData(true); }}
+        onDeleteCoupon={async id => { await db.coupons.delete(id); await loadData(true); }}
+        onToggleCoupon={async (id, active) => { await db.coupons.toggleActive(id, active); await loadData(true); }}
+        onRefreshData={() => loadData(true)}
+      />
+    );
+
     if (currentView === 'wishlist') return <Wishlist products={productsState} wishlist={wishlist} onToggleWishlist={toggleWishlist} onAddToCart={handleAddToCart} onBack={navigateToHome} />;
     if (currentView === 'track-order') return <OrderTracking orders={orders} onBack={navigateToHome} />;
     if (currentView === 'returns') return <PolicyPages.Returns onBack={navigateToHome} />;
     if (currentView === 'delivery') return <PolicyPages.Delivery onBack={navigateToHome} />;
     if (currentView === 'contact') return <PolicyPages.Contact onBack={navigateToHome} />;
     if (currentView === 'success' && lastOrder) return <OrderSuccess order={lastOrder} onContinue={navigateToHome} />;
-    if (currentView === 'checkout') return <Checkout items={cartItems} coupons={coupons} settings={settings} onBack={() => setCurrentView(selectedProduct ? 'detail' : 'catalog')} onPlaceOrder={async (d) => { await db.orders.create(d, cartItems); setLastOrder(d); setCartItems([]); setCurrentView('success'); loadData(true); }} />;
+    if (currentView === 'checkout') return <Checkout items={cartItems} coupons={coupons} settings={settings} onBack={() => setCurrentView(selectedProduct ? 'detail' : 'catalog')} onPlaceOrder={async d => { await db.orders.create(d, cartItems); setLastOrder(d); setCartItems([]); setCurrentView('success'); loadData(true); }} />;
 
-    if (selectedProduct) return <ProductDetail product={productsState.find(p => p.id === selectedProduct.id) || selectedProduct} onBack={() => setSelectedProduct(null)} onAddToCart={handleAddToCart} onBuyNow={(p) => { handleAddToCart(p); setCurrentView('checkout'); }} isWishlisted={wishlist.includes(selectedProduct.id)} onToggleWishlist={() => toggleWishlist(selectedProduct.id)} />;
+    if (selectedProduct) return (
+      <ProductDetail 
+        product={productsState.find(p => p.id === selectedProduct.id) || selectedProduct} 
+        onBack={() => setSelectedProduct(null)} onAddToCart={handleAddToCart} 
+        onBuyNow={p => { handleAddToCart(p); setCurrentView('checkout'); }} 
+        isWishlisted={wishlist.includes(selectedProduct.id)} 
+        onToggleWishlist={() => toggleWishlist(selectedProduct.id)}
+      />
+    );
 
     return (
       <div className="animate-in fade-in duration-1000">
         <Hero />
-        
-        {/* Artistic Watermark Section Background */}
-        <div className="relative">
-          <div className="absolute top-20 right-0 pointer-events-none opacity-[0.03] select-none hidden lg:block">
-            <span className="text-[20rem] font-bold cinzel leading-none rotate-90 origin-right">SIGNATURE</span>
-          </div>
-          
-          <CategoryShowcase onCategoryClick={(name) => setActiveCategory(name)} />
-          
-          <motion.section 
-            initial={{ opacity: 0, y: 50 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-            id="featured-products" 
-            className="py-24 bg-[#FAF9F6] scroll-mt-16 relative overflow-hidden"
-          >
-            {/* Soft decorative background elements */}
-            <div className="absolute top-0 left-0 w-64 h-64 bg-[#D4AF37]/5 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2" />
-            <div className="absolute bottom-0 right-0 w-96 h-96 bg-rose-200/5 rounded-full blur-3xl translate-x-1/3 translate-y-1/3" />
-
-            <div className="max-w-7xl mx-auto px-4 relative z-10">
-              <div className="flex flex-col md:flex-row md:items-end justify-between mb-16 gap-8">
-                <div>
-                  <div className="flex items-center gap-3 text-[#D4AF37] mb-4">
-                    <div className="h-[1px] w-8 bg-[#D4AF37]" />
-                    <span className="text-[10px] uppercase tracking-[0.4em] font-bold">Curated Treasures</span>
-                  </div>
-                  <h2 className="text-5xl md:text-6xl font-bold text-slate-800 serif mb-4">Our Creations</h2>
-                  <p className="text-[#705E52] max-w-lg leading-relaxed text-lg">Hand-finished details, heart-poured craftsmanship.</p>
-                </div>
-                
-                <div className="flex flex-wrap items-center gap-4">
-                  <div className="flex items-center gap-3 bg-white px-6 py-3 rounded-full border border-stone-200 shadow-sm">
-                    <Filter className="w-4 h-4 text-[#D4AF37]" />
-                    <select 
-                      value={sortOrder}
-                      onChange={(e) => setSortOrder(e.target.value as SortOption)}
-                      className="bg-transparent text-sm font-bold text-slate-600 outline-none cursor-pointer"
-                    >
-                      <option value="newest">Sort: Newest First</option>
-                      <option value="price-low">Sort: Low to High</option>
-                      <option value="price-high">Sort: High to Low</option>
-                    </select>
-                  </div>
-                </div>
+        <CategoryShowcase onCategoryClick={n => { setActiveCategory(n); document.getElementById('featured-products')?.scrollIntoView({ behavior: 'smooth' }); }} />
+        <section id="featured-products" className="py-24 bg-[#FAF9F6] scroll-mt-16 relative">
+          <div className="max-w-7xl mx-auto px-4">
+            <div className="flex flex-col md:flex-row md:items-end justify-between mb-16 gap-8">
+              <div>
+                <h2 className="text-5xl font-bold text-slate-800 serif">Our Creations</h2>
               </div>
-              
-              {loading ? (
-                <SkeletonGrid />
-              ) : sortedProducts.length === 0 ? (
-                <div className="text-center py-24 bg-white rounded-[3rem] border border-stone-100 shadow-sm">
-                  <p className="text-slate-400 font-medium italic text-xl">The workshop is quiet for now. Check back soon.</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
-                  {sortedProducts.map(product => (
-                    <ProductCard 
-                      key={product.id} 
-                      product={product} 
-                      onAddToCart={handleAddToCart} 
-                      onViewProduct={setSelectedProduct}
-                      isWishlisted={wishlist.includes(product.id)}
-                      onToggleWishlist={() => toggleWishlist(product.id)}
-                    />
-                  ))}
-                </div>
-              )}
+              <div className="flex gap-4">
+                <select value={sortOrder} onChange={e => setSortOrder(e.target.value as SortOption)} className="px-6 py-3 rounded-full border border-stone-200 outline-none font-bold text-xs bg-white shadow-sm">
+                  <option value="newest">Sort: Newest</option>
+                  <option value="price-low">Price: Low to High</option>
+                  <option value="price-high">Price: High to Low</option>
+                </select>
+              </div>
             </div>
-          </motion.section>
-        </div>
-
-        <PromoBanners />
-        
-        <motion.div 
-          initial={{ opacity: 0 }} 
-          whileInView={{ opacity: 1 }} 
-          viewport={{ once: true }} 
-          id="ai-finder" 
-          className="scroll-mt-16"
-        >
-          <GiftFinder />
-        </motion.div>
-        
+            {loading && productsState.length === 0 ? <SkeletonGrid /> : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+                {sortedProducts.map(p => (
+                  <ProductCard 
+                    key={p.id} 
+                    product={p} 
+                    onAddToCart={handleAddToCart} 
+                    onViewProduct={setSelectedProduct} 
+                    isWishlisted={wishlist.includes(p.id)} 
+                    onToggleWishlist={() => toggleWishlist(p.id)} 
+                  />
+                ))}
+              </div>
+            )}
+            {!loading && sortedProducts.length === 0 && (
+              <div className="text-center py-20 bg-white rounded-[3rem] border border-stone-50">
+                <p className="text-slate-400 italic">No products found in this category.</p>
+              </div>
+            )}
+          </div>
+        </section>
+        <PromoBanners items={promotions} />
+        <div id="ai-finder" className="scroll-mt-16"><GiftFinder /></div>
         <Testimonials testimonials={testimonials} />
       </div>
     );
   };
 
-  const isManagementView = currentView === 'admin_dashboard' || currentView === 'admin_login';
+  const isMgmt = currentView === 'admin_dashboard' || currentView === 'admin_login';
 
   return (
-    <div className="min-h-screen bg-[#FCFBF7] font-sans selection:bg-[#D4AF37]/30">
-      <AnimatePresence>
-        {showSplash && <Loader key="loader" />}
-      </AnimatePresence>
-      
-      {!isManagementView && (
-        <Navbar 
-          cartCount={cartCount} 
-          cartTotal={cartTotal} 
-          wishlistCount={wishlist.length}
-          onCartClick={() => setIsCartOpen(true)} 
-          onWishlistClick={() => setCurrentView('wishlist')}
-          onHomeClick={navigateToHome} 
-          products={productsState} 
-          onAddToCart={handleAddToCart} 
-          onViewProduct={(p) => { setSelectedProduct(p); setCurrentView('catalog'); }} 
-        />
-      )}
-      
-      <main className={!isManagementView ? "pt-16" : ""}>{renderContent()}</main>
-      
-      {!isManagementView && (
-        <footer id="footer" className="bg-[#1C1917] text-stone-300 py-24 border-t border-[#D4AF37]/10">
-          <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-4 gap-16 text-sm">
-            <div className="col-span-1 md:col-span-2">
-              <div className="flex items-center gap-4 mb-8">
+    <div className="min-h-screen bg-[#FCFBF7] selection:bg-[#D4AF37]/30">
+      <AnimatePresence>{showSplash && <Loader key="loader" />}</AnimatePresence>
+      {!isMgmt && <Navbar cartCount={cartCount} cartTotal={cartTotal} wishlistCount={wishlist.length} onCartClick={() => setIsCartOpen(true)} onWishlistClick={() => setCurrentView('wishlist')} onHomeClick={navigateToHome} products={productsState} onAddToCart={handleAddToCart} onViewProduct={p => { setSelectedProduct(p); setCurrentView('catalog'); }} />}
+      <main className={!isMgmt ? "pt-16" : ""}>{renderContent()}</main>
+      {!isMgmt && (
+        <footer id="footer" className="bg-[#1C1917] text-stone-300 py-24">
+          <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-4 gap-16">
+            <div className="col-span-1 md:col-span-1">
+              <div className="flex items-center gap-4 mb-6">
                 <Logo className="w-14 h-14" />
-                <span className="text-3xl font-bold text-white serif tracking-wide">SS Creations</span>
+                <span className="text-3xl font-bold text-white serif">SS Creations</span>
               </div>
-              <p className="text-stone-400 mb-8 leading-relaxed max-w-md text-base italic font-light">"Crafting more than just objects; we create vessels for your most precious memories."</p>
+              <p className="text-stone-500 text-sm leading-relaxed mb-8 max-w-xs">
+                Handcrafting magic in every gift. We create unique treasures that speak the language of the heart.
+              </p>
               <div className="flex gap-4">
-                <button onClick={() => setCurrentView('admin_login')} className="px-5 py-2.5 bg-white/5 border border-white/10 rounded-full flex items-center gap-2 hover:text-[#D4AF37] hover:border-[#D4AF37]/50 transition-all text-xs font-bold uppercase tracking-widest">
-                   <Settings className="w-4 h-4" /> Management Portal
-                </button>
+                <a href="#" className="p-3 bg-white/5 rounded-full hover:bg-[#D4AF37] hover:text-white transition-all"><Facebook className="w-4 h-4" /></a>
+                <a href="#" className="p-3 bg-white/5 rounded-full hover:bg-[#D4AF37] hover:text-white transition-all"><Instagram className="w-4 h-4" /></a>
+                <a href="https://wa.me/9470596039" className="p-3 bg-white/5 rounded-full hover:bg-emerald-500 hover:text-white transition-all"><MessageCircle className="w-4 h-4" /></a>
               </div>
             </div>
+            
             <div>
-              <h5 className="text-[#D4AF37] font-bold mb-8 uppercase tracking-[0.3em] text-[10px]">The Boutique</h5>
-              <ul className="space-y-5">
-                <li><button onClick={() => setCurrentView('track-order')} className="hover:text-[#D4AF37] transition-all text-left font-medium">Order Concierge</button></li>
-                <li><button onClick={() => setCurrentView('delivery')} className="hover:text-[#D4AF37] transition-all text-left font-medium">Courier Information</button></li>
-                <li><button onClick={() => setCurrentView('returns')} className="hover:text-[#D4AF37] transition-all text-left font-medium">Return Policy</button></li>
-                <li><button onClick={() => setCurrentView('contact')} className="hover:text-[#D4AF37] transition-all text-left font-medium">Studio Connection</button></li>
+              <h5 className="text-[#D4AF37] font-bold mb-8 uppercase text-[10px] tracking-widest">Studio Info</h5>
+              <ul className="space-y-4 text-sm">
+                <li><button onClick={() => setCurrentView('track-order')} className="hover:text-white transition-colors">Track Order</button></li>
+                <li><button onClick={() => setCurrentView('contact')} className="hover:text-white transition-colors">Contact Us</button></li>
+                <li><button onClick={() => setCurrentView('returns')} className="hover:text-white transition-colors">Return Policy</button></li>
+                <li><button onClick={() => setCurrentView('delivery')} className="hover:text-white transition-colors">Delivery Info</button></li>
               </ul>
             </div>
+
             <div>
-              <h5 className="text-[#D4AF37] font-bold mb-8 uppercase tracking-[0.3em] text-[10px]">Studio Signature</h5>
-              <div className="p-6 bg-white/5 rounded-[2rem] border border-white/10 flex flex-col items-center justify-center text-center">
-                <Heart className="w-6 h-6 text-rose-400 mb-3" />
-                <p className="text-[10px] text-stone-500 uppercase tracking-widest leading-relaxed">Handmade with Love <br/> In Sri Lanka</p>
+              <h5 className="text-[#D4AF37] font-bold mb-8 uppercase text-[10px] tracking-widest">Connect</h5>
+              <ul className="space-y-4 text-sm">
+                <li className="flex items-start gap-3"><MapPin className="w-4 h-4 text-[#D4AF37] mt-1" /><span className="text-stone-400">123 Artisan Lane, Colombo 07, Sri Lanka</span></li>
+                <li className="flex items-center gap-3"><Phone className="w-4 h-4 text-[#D4AF37]" /><span className="text-stone-400">+94 70 596 039</span></li>
+                <li className="flex items-center gap-3"><Mail className="w-4 h-4 text-[#D4AF37]" /><span className="text-stone-400">hello@sscreations.com</span></li>
+              </ul>
+            </div>
+
+            <div className="flex flex-col items-center md:items-end">
+              <h5 className="text-[#D4AF37] font-bold mb-8 uppercase text-[10px] tracking-widest self-center md:self-end">Handmade Pride</h5>
+              <div className="p-8 bg-white/5 rounded-[2.5rem] border border-white/10 text-center w-full">
+                <Heart className="w-8 h-8 text-rose-400 mx-auto mb-4" />
+                <p className="text-[10px] text-stone-300 uppercase tracking-[0.3em] leading-relaxed font-bold">
+                  Made with Love <br/><span className="text-[#D4AF37]">In Sri Lanka</span>
+                </p>
               </div>
+              <button onClick={() => setCurrentView('admin_login')} className="mt-8 px-6 py-3 bg-white/5 border border-white/10 rounded-full text-[9px] font-bold uppercase tracking-widest hover:text-[#D4AF37] transition-all">Management Portal</button>
             </div>
           </div>
-          <div className="max-w-7xl mx-auto px-4 mt-20 pt-10 border-t border-white/5 text-center text-[10px] text-stone-600 uppercase tracking-[0.4em]">
-            © {new Date().getFullYear()} SS Creations Artisanal Studio. All Rights Reserved.
+          
+          <div className="max-w-7xl mx-auto px-4 mt-24 pt-8 border-t border-white/5 flex flex-col md:flex-row justify-between items-center gap-6">
+            <div className="flex flex-col items-center md:items-start gap-2">
+              <p className="text-[10px] text-stone-600 uppercase tracking-widest">© {new Date().getFullYear()} SS Creations Boutique. All Rights Reserved.</p>
+              <p className="text-[9px] text-stone-700 uppercase tracking-[0.4em] font-medium">Developed by <span className="text-[#D4AF37] font-bold">Yohan</span></p>
+            </div>
+            <div className="flex gap-6 text-[10px] text-stone-600 uppercase tracking-widest">
+              <a href="#" className="hover:text-white">Privacy</a>
+              <a href="#" className="hover:text-white">Terms</a>
+            </div>
           </div>
         </footer>
       )}
-      {!isManagementView && (
-        <>
-          <CartDrawer isOpen={isCartOpen} onClose={() => setIsCartOpen(false)} items={cartItems} onUpdateQuantity={(id, delta) => setCartItems(prev => prev.map(i => i.id === id ? {...i, quantity: Math.max(1, i.quantity + delta)} : i))} onRemove={(id) => setCartItems(prev => prev.filter(i => i.id !== id))} onCheckout={() => { setIsCartOpen(false); setCurrentView('checkout'); }} />
-          <WhatsAppButton />
-        </>
-      )}
+      {!isMgmt && <><CartDrawer isOpen={isCartOpen} onClose={() => setIsCartOpen(false)} items={cartItems} onUpdateQuantity={(id, d) => setCartItems(prev => prev.map(i => i.id === id ? {...i, quantity: Math.max(1, i.quantity + d)} : i))} onRemove={id => setCartItems(prev => prev.filter(i => i.id !== id))} onCheckout={() => { setIsCartOpen(false); setCurrentView('checkout'); }} /><WhatsAppButton /></>}
     </div>
   );
 };

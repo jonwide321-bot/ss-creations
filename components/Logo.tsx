@@ -6,14 +6,13 @@ interface LogoProps {
   variant?: 'light' | 'dark';
 }
 
-const Logo: React.FC<LogoProps> = ({ className = "w-10 h-10" }) => {
+const Logo: React.FC<LogoProps> = ({ className = "w-10 h-10", variant = 'dark' }) => {
   return (
     <img 
       src="https://i.postimg.cc/zvs0wgqr/logo.jpg" 
       alt="SS Creations" 
-      className={`${className} object-contain rounded-full`}
+      className={`${className} object-contain rounded-full ${variant === 'light' ? 'brightness-110' : ''}`}
       onError={(e) => {
-        // Fallback styling if image is missing
         e.currentTarget.style.display = 'none';
       }}
     />

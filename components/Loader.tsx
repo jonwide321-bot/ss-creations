@@ -3,7 +3,8 @@ import React from 'react';
 import { motion } from 'framer-motion';
 
 const Loader: React.FC = () => {
-  const luxuryBezier = [0.4, 0, 0.2, 1];
+  // FIX: Explicitly type `luxuryBezier` as a tuple to match framer-motion's `ease` property type for cubic-bezier values.
+  const luxuryBezier: [number, number, number, number] = [0.4, 0, 0.2, 1];
 
   // Colors for the floating orbs - Made movement faster for more energy
   const orbs = [

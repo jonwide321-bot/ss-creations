@@ -73,7 +73,24 @@ export interface ShippingRate {
 export interface Coupon {
   id: string;
   code: string;
-  discount_percent: number;
+  discount_type: 'percentage' | 'fixed';
+  discount_value: number;
+  min_order_amount: number;
+  expiry_date?: string; // ISO String
+  active: boolean;
+  // Legacy support for migration
+  discount_percent?: number; 
+}
+
+export interface Promotion {
+  id: string;
+  badge_text: string;
+  title: string;
+  description: string;
+  bg_color: string;
+  text_color: string;
+  cta_text: string;
+  link_url: string;
   active: boolean;
 }
 
