@@ -21,47 +21,50 @@ const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY') || DEFAULT_KEY;
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-export const isStripeKeyError = () => {
-  if (!supabaseAnonKey) return false;
-  return supabaseAnonKey.startsWith('sb_') || supabaseAnonKey.startsWith('pk_');
-};
-
 export const isSupabaseConfigured = () => !!(supabaseUrl && supabaseAnonKey && supabaseAnonKey.length > 20);
+export const isStripeKeyError = () => false;
 
+/**
+ * Maps database record to the UI Product type
+ */
 const mapProductFromDB = (p: any) => ({
   id: p.id,
-  name: p.name,
-  description: p.description,
-  price: Number(p.price),
+  name: p.name || 'Untitled',
+  description: p.description || '',
+  price: Number(p.price || 0),
   originalPrice: p.original_price ? Number(p.original_price) : undefined,
-  category: p.category,
-  image: p.image,
-  gallery: Array.isArray(p.gallery) ? p.gallery : [p.image],
+  category: p.category || 'Uncategorized',
+  image: p.image || '',
+  gallery: Array.isArray(p.gallery) ? p.gallery : [p.image || ''],
   rating: Number(p.rating || 4.5),
   highlights: Array.isArray(p.highlights) ? p.highlights : [],
   stock: Number(p.stock || 0),
-  detailedDescription: p.detailed_description || p.description,
-  isBestSeller: !!p.is_best_seller,
-  isNewArrival: !!p.is_new_arrival,
-  isFreeShipping: !!p.is_free_shipping
+  detailedDescription: p.detailed_description || p.description || '',
+  isBestSeller: Boolean(p.is_best_seller),
+  isNewArrival: Boolean(p.is_new_arrival),
+  isFreeShipping: Boolean(p.is_free_shipping)
 });
 
-const mapProductToDB = (p: any) => ({
-  name: p.name,
-  description: p.description,
-  price: p.price,
-  original_price: p.originalPrice || null,
-  category: p.category,
-  image: p.image,
-  gallery: p.gallery || [p.image],
-  rating: p.rating || 4.5,
-  highlights: p.highlights || [],
-  stock: p.stock || 0,
-  detailed_description: p.detailedDescription || p.description,
-  is_best_seller: !!p.isBestSeller,
-  is_new_arrival: !!p.isNewArrival,
-  is_free_shipping: !!p.isFreeShipping
-});
+/**
+ * Maps UI Product data to database columns
+ */
+const mapProductToDB = (p: any) => {
+  return {
+    name: p.name,
+    description: p.description || '',
+    price: parseFloat(p.price?.toString() || '0'),
+    original_price: p.originalPrice ? parseFloat(p.originalPrice.toString()) : null,
+    category: p.category || 'Uncategorized',
+    image: p.image || '',
+    stock: parseInt(p.stock?.toString() || '0'),
+    is_best_seller: Boolean(p.isBestSeller),
+    is_new_arrival: Boolean(p.isNewArrival),
+    is_free_shipping: Boolean(p.isFreeShipping),
+    gallery: p.gallery || [],
+    highlights: p.highlights || [],
+    detailed_description: p.detailedDescription || p.description || ''
+  };
+};
 
 export const db = {
   products: {
@@ -81,10 +84,18 @@ export const db = {
       const dbData = mapProductToDB(product);
       
       let result;
-      if (product.id && product.id.length > 10) {
-        result = await supabase.from('products').update(dbData).eq('id', product.id).select();
+      // If it's a UUID and not a local temp ID
+      if (product.id && product.id.length > 20) {
+        result = await supabase
+          .from('products')
+          .update(dbData)
+          .eq('id', product.id)
+          .select();
       } else {
-        result = await supabase.from('products').insert(dbData).select();
+        result = await supabase
+          .from('products')
+          .insert(dbData)
+          .select();
       }
 
       if (result.error) throw result.error;
@@ -95,32 +106,27 @@ export const db = {
       if (error) throw error;
     },
     async uploadImage(file: File) {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}.${fileExt}`;
-      const filePath = `products/${fileName}`;
-
-      const { error: uploadError, data } = await supabase.storage
+      const fileName = `${Date.now()}-${file.name}`;
+      const { error: uploadError } = await supabase.storage
         .from('product-images')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: false
-        });
+        .upload(`products/${fileName}`, file);
 
-      if (uploadError) {
-        console.error('Storage error:', uploadError);
-        throw new Error(uploadError.message);
-      }
+      if (uploadError) throw uploadError;
 
       const { data: { publicUrl } } = supabase.storage
         .from('product-images')
-        .getPublicUrl(filePath);
+        .getPublicUrl(`products/${fileName}`);
 
       return publicUrl;
     }
   },
   orders: {
     async getAll() {
-      const { data, error } = await supabase.from('orders').select(`*, customers (*), order_items (*, products (*))`).order('created_at', { ascending: false });
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`*, customers (*), order_items (*, products (*))`)
+        .order('created_at', { ascending: false });
+        
       if (error) return [];
       return (data || []).map(o => ({
         id: o.id,
@@ -146,30 +152,39 @@ export const db = {
       }));
     },
     async create(orderDetails: any, cartItems: any[]) {
-      const { data: customer, error: cErr } = await supabase.from('customers').upsert({
-        email: orderDetails.shippingAddress.email,
-        name: orderDetails.shippingAddress.name,
-        phone: orderDetails.shippingAddress.phone,
-        address: orderDetails.shippingAddress.address,
-        city: orderDetails.shippingAddress.city
-      }, { onConflict: 'email' }).select().single();
+      // 1. Create/Update Customer
+      const { data: customer, error: cErr } = await supabase
+        .from('customers')
+        .upsert({
+          email: orderDetails.shippingAddress.email,
+          name: orderDetails.shippingAddress.name,
+          phone: orderDetails.shippingAddress.phone,
+          address: orderDetails.shippingAddress.address,
+          city: orderDetails.shippingAddress.city
+        }, { onConflict: 'email' })
+        .select()
+        .single();
       
       if (cErr) throw cErr;
 
-      const { error: oErr } = await supabase.from('orders').insert({
-        id: orderDetails.id,
-        customer_id: customer.id,
-        total: orderDetails.total,
-        subtotal: orderDetails.subtotal,
-        shipping_fee: orderDetails.shippingFee,
-        discount: orderDetails.discount,
-        status: 'Pending',
-        payment_method: orderDetails.paymentMethod,
-        date: new Date().toISOString()
-      });
+      // 2. Create Order
+      const { error: oErr } = await supabase
+        .from('orders')
+        .insert({
+          id: orderDetails.id,
+          customer_id: customer.id,
+          total: orderDetails.total,
+          subtotal: orderDetails.subtotal,
+          shipping_fee: orderDetails.shippingFee,
+          discount: orderDetails.discount,
+          status: 'Pending',
+          payment_method: orderDetails.paymentMethod,
+          date: new Date().toISOString()
+        });
       
       if (oErr) throw oErr;
 
+      // 3. Create Order Items
       const items = cartItems.map(item => ({ 
         order_id: orderDetails.id, 
         product_id: item.id, 
@@ -182,6 +197,30 @@ export const db = {
     },
     async updateStatus(id: string, status: string) {
       await supabase.from('orders').update({ status }).eq('id', id);
+    }
+  },
+  shippingRates: {
+    async getAll() {
+      const { data, error } = await supabase.from('shipping_rates').select('*').order('district_name');
+      return data || [];
+    },
+    async upsert(rate: any) {
+      const { data, error } = await supabase.from('shipping_rates').upsert(rate).select();
+      if (error) throw error;
+      return data[0];
+    },
+    async updateRate(id: string, rate: number) {
+      const { error } = await supabase.from('shipping_rates').update({ rate }).eq('id', id);
+      if (error) throw error;
+    }
+  },
+  settings: {
+    async get() {
+      const { data, error } = await supabase.from('settings').select('value').eq('key', 'store_settings').single();
+      return data?.value || { baseShippingFee: 500.00 };
+    },
+    async update(value: any) {
+      await supabase.from('settings').upsert({ key: 'store_settings', value });
     }
   },
   coupons: {
@@ -211,34 +250,6 @@ export const db = {
     },
     async remove(visitor_id: string, product_id: string) {
       await supabase.from('wishlists').delete().eq('visitor_id', visitor_id).eq('product_id', product_id);
-    }
-  },
-  settings: {
-    async get() {
-      const { data, error } = await supabase.from('settings').select('value').eq('key', 'store_settings').single();
-      return data?.value || { baseShippingFee: 500.00 };
-    },
-    async update(value: any) {
-      await supabase.from('settings').upsert({ key: 'store_settings', value });
-    }
-  },
-  shippingRates: {
-    async getAll() {
-      const { data, error } = await supabase.from('shipping_rates').select('*').order('district_name');
-      if (error) {
-        console.warn("Shipping rates table might be missing. Using defaults.");
-        return [];
-      }
-      return data || [];
-    },
-    async upsert(rate: any) {
-      const { data, error } = await supabase.from('shipping_rates').upsert(rate).select();
-      if (error) throw error;
-      return data[0];
-    },
-    async updateRate(id: string, rate: number) {
-      const { error } = await supabase.from('shipping_rates').update({ rate }).eq('id', id);
-      if (error) throw error;
     }
   }
 };

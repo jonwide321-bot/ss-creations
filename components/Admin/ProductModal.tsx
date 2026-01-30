@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Upload, Trash2, Loader2, Image as ImageIcon, Link as LinkIcon, Plus, Copy, List, AlertTriangle, Sparkles } from 'lucide-react';
+import { X, Save, Upload, Trash2, Loader2, Image as ImageIcon, Link as LinkIcon, Plus, Copy, List, AlertTriangle, Sparkles, Star } from 'lucide-react';
 import { Product } from '../../types';
 import { db } from '../../lib/supabase';
 
@@ -15,13 +15,16 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, onClose, onSave, o
   const [formData, setFormData] = useState<Partial<Product>>({
     name: '',
     price: 0,
+    originalPrice: undefined,
     category: 'Flowers',
     stock: 0,
     image: '',
     description: '',
     highlights: [],
     gallery: ['', '', '', ''],
-    isFreeShipping: false
+    isFreeShipping: false,
+    isBestSeller: false,
+    isNewArrival: true
   });
   
   const [uploadingIdx, setUploadingIdx] = useState<number | null>(null);
@@ -70,7 +73,8 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, onClose, onSave, o
       const url = await db.products.uploadImage(file);
       updateGalleryUrl(index, url);
     } catch (error: any) {
-      alert('Upload failed: ' + error.message);
+      console.error("Upload error:", error);
+      alert('Upload failed: ' + (error.message || 'Check your Supabase bucket permissions.'));
     } finally {
       setUploadingIdx(null);
     }
@@ -80,25 +84,25 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, onClose, onSave, o
     e.preventDefault();
     const finalGallery = (formData.gallery || []).filter(img => img && img.trim() !== '');
     
-    if (finalGallery.length === 0) {
-      alert('Please add at least the main product image.');
+    if (finalGallery.length === 0 && !formData.image) {
+      alert('Please provide at least one product image.');
       return;
     }
 
     const finalProduct = {
       ...formData,
       id: product?.id,
-      image: finalGallery[0],
+      image: finalGallery.length > 0 ? finalGallery[0] : (formData.image || ''),
       gallery: finalGallery,
-      price: Number(formData.price) || 0,
-      stock: Number(formData.stock) || 0,
-      rating: product?.rating || 4.5,
-      highlights: formData.highlights?.length ? formData.highlights : ['Premium Quality', 'Hand Crafted'],
-      detailedDescription: formData.description || '',
+      price: parseFloat(formData.price?.toString() || '0'),
+      originalPrice: formData.originalPrice ? parseFloat(formData.originalPrice.toString()) : undefined,
+      stock: parseInt(formData.stock?.toString() || '0'),
+      isFreeShipping: !!formData.isFreeShipping,
+      isBestSeller: !!formData.isBestSeller,
+      isNewArrival: !!formData.isNewArrival
     } as Product;
     
     onSave(finalProduct);
-    onClose();
   };
 
   const executeDelete = async () => {
@@ -107,11 +111,9 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, onClose, onSave, o
       try {
         await onDelete(product.id);
         onClose();
-      } catch (error) {
-        console.error("Delete failed:", error);
-        alert("Failed to delete product.");
+      } catch (error: any) {
+        alert("Delete failed: " + error.message);
         setIsDeleting(false);
-        setShowConfirmDelete(false);
       }
     }
   };
@@ -127,7 +129,7 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, onClose, onSave, o
               <ImageIcon className="w-5 h-5 text-white" />
             </div>
             <h2 className="text-2xl font-bold text-slate-800 serif">
-              {product ? 'Edit Creation' : 'New Creation'}
+              {product ? 'Edit Treasure' : 'New Listing'}
             </h2>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white rounded-full transition-colors border border-stone-200 shadow-sm">
@@ -139,124 +141,113 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, onClose, onSave, o
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
             <div className="lg:col-span-7 space-y-6">
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Product Name</label>
-                <input required type="text" className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-medium transition-all" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="Title of your gift item" />
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Product Title</label>
+                <input required type="text" className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-medium transition-all" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="e.g. Artisanal Velvet Box" />
               </div>
               
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Price (Rs.)</label>
-                  <input required type="number" step="1" className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-bold" value={formData.price} onChange={e => setFormData({...formData, price: Number(e.target.value)})} />
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Selling Price (Rs.)</label>
+                  <input required type="number" step="0.01" className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-bold" value={formData.price} onChange={e => setFormData({...formData, price: Number(e.target.value)})} />
                 </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Original Price (Rs.)</label>
+                  <input type="number" step="0.01" className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-100 focus:border-rose-500 outline-none text-sm font-bold" value={formData.originalPrice || ''} onChange={e => setFormData({...formData, originalPrice: e.target.value ? Number(e.target.value) : undefined})} placeholder="Optional for strike-through" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Stock Quantity</label>
                   <input required type="number" className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-bold" value={formData.stock} onChange={e => setFormData({...formData, stock: Number(e.target.value)})} />
                 </div>
-              </div>
-
-              <div className="flex items-center gap-4 bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-                <Sparkles className="w-5 h-5 text-emerald-500" />
-                <div className="flex-grow">
-                  <p className="text-xs font-bold text-emerald-800">Free Shipping Privilege</p>
-                  <p className="text-[10px] text-emerald-600">If enabled, any order containing this product will have Rs. 0 shipping fee.</p>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Category</label>
+                  <select className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-medium" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
+                    {['Flowers', 'Gourmet', 'Personalized', 'Home Decor', 'Toys', 'Accessories'].map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    className="sr-only peer" 
-                    checked={formData.isFreeShipping} 
-                    onChange={e => setFormData({...formData, isFreeShipping: e.target.checked})}
-                  />
-                  <div className="w-11 h-6 bg-stone-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex items-center gap-4 bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
+                  <Sparkles className="w-5 h-5 text-emerald-500 flex-shrink-0" />
+                  <div className="flex-grow">
+                    <p className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Free Delivery</p>
+                    <p className="text-[8px] text-emerald-600">Global cart override</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer" 
+                      checked={formData.isFreeShipping} 
+                      onChange={e => setFormData({...formData, isFreeShipping: e.target.checked})}
+                    />
+                    <div className="w-11 h-6 bg-stone-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-4 bg-amber-50 p-4 rounded-2xl border border-amber-100">
+                  <Star className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                  <div className="flex-grow">
+                    <p className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">Best Seller</p>
+                    <p className="text-[8px] text-amber-600">Show badge on shop</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer" 
+                      checked={formData.isBestSeller} 
+                      onChange={e => setFormData({...formData, isBestSeller: e.target.checked})}
+                    />
+                    <div className="w-11 h-6 bg-stone-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                  </label>
+                </div>
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Category</label>
-                <select className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-medium" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
-                  {['Flowers', 'Gourmet', 'Personalized', 'Home Decor', 'Toys', 'Accessories'].map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Public Description</label>
-                <textarea required rows={5} className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-medium resize-none" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} placeholder="Tell the story of this gift..." />
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Product Description</label>
+                <textarea required rows={4} className="w-full px-5 py-4 rounded-2xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none text-sm font-medium resize-none" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} placeholder="Describe the craftsmanship..." />
               </div>
             </div>
 
             <div className="lg:col-span-5 space-y-6">
               <div className="flex items-center justify-between">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Gallery (4 Slots)</label>
-                <button 
-                  type="button" 
-                  onClick={() => setShowBulkPaste(!showBulkPaste)}
-                  className="text-[10px] font-bold text-rose-500 hover:underline uppercase flex items-center gap-1"
-                >
-                  <List className="w-3 h-3" /> Bulk URL Import
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Imagery (4 Slots)</label>
+                <button type="button" onClick={() => setShowBulkPaste(!showBulkPaste)} className="text-[10px] font-bold text-rose-500 hover:underline uppercase flex items-center gap-1">
+                  <List className="w-3 h-3" /> Bulk URL
                 </button>
               </div>
 
               {showBulkPaste && (
-                <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100 space-y-3 animate-in fade-in slide-in-from-top-2">
-                  <label className="text-[9px] font-bold text-rose-400 uppercase">Paste URLs (comma or line separated)</label>
-                  <textarea 
-                    rows={3}
-                    className="w-full p-3 text-xs rounded-xl border border-rose-100 outline-none font-mono"
-                    placeholder="url1, url2, url3, url4"
-                    value={bulkUrls}
-                    onChange={e => setBulkUrls(e.target.value)}
-                  />
-                  <div className="flex gap-2">
-                    <button type="button" onClick={handleBulkImport} className="flex-1 py-2 bg-rose-500 text-white text-[10px] font-bold rounded-lg uppercase">Apply All</button>
-                    <button type="button" onClick={() => setShowBulkPaste(false)} className="px-3 py-2 bg-white text-slate-400 text-[10px] font-bold rounded-lg uppercase">Cancel</button>
-                  </div>
+                <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100 space-y-3">
+                  <textarea rows={2} className="w-full p-3 text-xs rounded-xl border border-rose-100 outline-none font-mono" placeholder="Paste URLs here..." value={bulkUrls} onChange={e => setBulkUrls(e.target.value)} />
+                  <button type="button" onClick={handleBulkImport} className="w-full py-2 bg-rose-500 text-white text-[10px] font-bold rounded-lg uppercase">Apply</button>
                 </div>
               )}
 
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {[0, 1, 2, 3].map((i) => (
-                  <div key={i} className="flex gap-4 items-start group">
-                    <div className="w-20 h-20 rounded-xl bg-stone-100 border border-stone-200 flex-shrink-0 overflow-hidden relative">
+                  <div key={i} className="flex gap-4 items-center">
+                    <div className="w-16 h-16 rounded-xl bg-stone-100 border border-stone-200 flex-shrink-0 overflow-hidden relative">
                       {formData.gallery?.[i] ? (
                         <img src={formData.gallery[i]} className="w-full h-full object-cover" alt="" />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-stone-300">
-                          <Plus className="w-5 h-5" />
-                        </div>
+                        <div className="w-full h-full flex items-center justify-center text-stone-300"><Plus className="w-4 h-4" /></div>
                       )}
-                      {uploadingIdx === i && (
-                        <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
-                          <Loader2 className="w-5 h-5 animate-spin text-rose-500" />
-                        </div>
-                      )}
+                      {uploadingIdx === i && <div className="absolute inset-0 bg-white/80 flex items-center justify-center"><Loader2 className="w-4 h-4 animate-spin text-rose-500" /></div>}
                     </div>
-                    <div className="flex-grow space-y-2">
+                    <div className="flex-grow space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase">{i === 0 ? 'Main Image' : `Image ${i + 1}`}</span>
-                        <div className="flex gap-2">
-                           <input 
-                            type="file" 
-                            accept="image/*" 
-                            className="hidden" 
-                            id={`file-${i}`} 
-                            onChange={(e) => handleFileUpload(e, i)} 
-                          />
-                          <label htmlFor={`file-${i}`} className="p-1.5 hover:bg-rose-50 rounded-md cursor-pointer text-slate-400 hover:text-rose-500 transition-colors">
-                            <Upload className="w-3.5 h-3.5" />
-                          </label>
-                        </div>
+                        <span className="text-[8px] font-bold text-slate-400 uppercase">{i === 0 ? 'Primary' : `Alt ${i}`}</span>
+                        <input type="file" accept="image/*" className="hidden" id={`file-${i}`} onChange={(e) => handleFileUpload(e, i)} />
+                        <label htmlFor={`file-${i}`} className="p-1 hover:bg-rose-50 rounded text-slate-400 hover:text-rose-500 cursor-pointer transition-colors"><Upload className="w-3 h-3" /></label>
                       </div>
                       <div className="relative">
-                        <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-300" />
-                        <input 
-                          type="url" 
-                          className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-stone-50 border border-stone-200 focus:border-rose-500 outline-none font-mono" 
-                          placeholder="Image URL..." 
-                          value={formData.gallery?.[i] || ''} 
-                          onChange={e => updateGalleryUrl(i, e.target.value)} 
-                        />
+                        <LinkIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-slate-300" />
+                        <input type="url" className="w-full pl-7 pr-3 py-1.5 text-[10px] rounded-lg bg-stone-50 border border-stone-200 outline-none font-mono" placeholder="URL..." value={formData.gallery?.[i] || ''} onChange={e => updateGalleryUrl(i, e.target.value)} />
                       </div>
                     </div>
                   </div>
@@ -267,53 +258,24 @@ const ProductModal: React.FC<ProductModalProps> = ({ product, onClose, onSave, o
         </form>
 
         <div className="p-8 border-t border-stone-100 bg-stone-50/50 flex flex-col sm:flex-row justify-between gap-4">
-          <div className="flex items-center">
+          <div>
             {product && onDelete && !showConfirmDelete && (
-              <button 
-                type="button" 
-                onClick={() => setShowConfirmDelete(true)}
-                className="px-6 py-4 rounded-2xl bg-white border border-rose-200 text-rose-500 font-bold hover:bg-rose-50 transition-all flex items-center gap-2 group"
-              >
-                <Trash2 className="w-4 h-4 group-hover:scale-110 transition-transform" /> Delete Forever
+              <button type="button" onClick={() => setShowConfirmDelete(true)} className="px-6 py-4 rounded-2xl border border-rose-200 text-rose-500 font-bold hover:bg-rose-50 transition-all flex items-center gap-2">
+                <Trash2 className="w-4 h-4" /> Archive
               </button>
             )}
-
             {showConfirmDelete && (
-              <div className="flex items-center gap-3 animate-in fade-in slide-in-from-left-4 duration-300">
-                <div className="bg-rose-500 text-white p-2 rounded-lg">
-                  <AlertTriangle className="w-4 h-4" />
-                </div>
-                <div className="flex flex-col mr-4">
-                  <span className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Are you sure?</span>
-                  <span className="text-xs text-slate-500">This cannot be undone.</span>
-                </div>
-                <button 
-                  type="button" 
-                  onClick={executeDelete}
-                  disabled={isDeleting}
-                  className="px-5 py-3 rounded-xl bg-rose-500 text-white text-xs font-bold hover:bg-rose-600 transition-all shadow-lg flex items-center gap-2"
-                >
-                  {isDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Confirm Delete"}
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => setShowConfirmDelete(false)}
-                  className="px-4 py-3 rounded-xl bg-white border border-stone-200 text-slate-400 text-xs font-bold"
-                >
-                  Cancel
-                </button>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={executeDelete} disabled={isDeleting} className="px-5 py-3 rounded-xl bg-rose-500 text-white text-xs font-bold shadow-lg">Confirm</button>
+                <button type="button" onClick={() => setShowConfirmDelete(false)} className="px-5 py-3 rounded-xl bg-white border border-stone-200 text-slate-400 text-xs font-bold">Cancel</button>
               </div>
             )}
           </div>
           
           <div className="flex gap-4">
-            <button type="button" onClick={onClose} className="px-8 py-4 rounded-2xl bg-white border border-stone-200 text-slate-500 font-bold hover:bg-stone-100 transition-colors">Discard</button>
-            <button 
-              type="submit" 
-              form="product-form"
-              className="px-10 py-4 rounded-2xl bg-slate-900 text-white font-bold hover:bg-rose-500 transition-all shadow-lg flex items-center justify-center gap-2 group"
-            >
-              <Save className="w-5 h-5 group-hover:scale-110 transition-transform" /> {product ? 'Update Treasure' : 'List Treasure'}
+            <button type="button" onClick={onClose} className="px-8 py-4 rounded-2xl bg-white border border-stone-200 text-slate-500 font-bold">Discard</button>
+            <button type="submit" form="product-form" className="px-10 py-4 rounded-2xl bg-slate-900 text-white font-bold hover:bg-rose-500 transition-all shadow-lg flex items-center gap-2">
+              <Save className="w-5 h-5" /> {product ? 'Update Treasure' : 'List Item'}
             </button>
           </div>
         </div>
