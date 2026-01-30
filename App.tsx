@@ -60,6 +60,8 @@ const App: React.FC = () => {
 
   const loadData = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
+    console.log("🔄 Syncing with SS Studio Database...");
+    
     try {
       const results = await Promise.allSettled([
         db.products.getAll(),
@@ -70,18 +72,32 @@ const App: React.FC = () => {
         db.promotions.getAll()
       ]);
 
-      const [p, s, o, c, w, pr] = results.map(r => r.status === 'fulfilled' ? r.value : null);
+      const [p, s, o, c, w, pr] = results.map((r, idx) => {
+        if (r.status === 'fulfilled') return r.value;
+        console.error(`❌ Load Error in category ${idx}:`, (r as PromiseRejectedResult).reason);
+        return null;
+      });
 
-      if (p) setProductsState(p);
+      if (p) {
+        console.log(`✅ Loaded ${p.length} products`);
+        setProductsState(p);
+      } else {
+        setProductsState([]);
+      }
+
       if (s) setSettings(s);
-      if (o) setOrders(o);
+      
+      // Crucial: Set orders even if result is null to avoid stale empty state
+      console.log(`📦 Order Sync: ${o ? o.length : 0} records fetched`);
+      setOrders(o || []);
+      
       if (c) setCoupons(c);
       if (w) setWishlist(w);
       if (pr) setPromotions(pr);
       
       setLoadError(null);
     } catch (err: any) {
-      console.error("Critical Sync Error:", err);
+      console.error("🚨 Critical Sync Error:", err);
       if (!isSilent) setLoadError("Unable to connect to the studio. Please check your internet connection.");
     } finally {
       setLoading(false);
@@ -89,30 +105,49 @@ const App: React.FC = () => {
   }, [visitorId]);
 
   useEffect(() => {
-    // Fail-safe: Always hide splash after a maximum of 4 seconds
-    const splashTimeout = setTimeout(() => {
-      setShowSplash(false);
-    }, 4000);
+    const startTime = Date.now();
+    const MIN_LOAD_TIME = 5500; 
 
     const init = async () => {
       await loadData();
-      // If data loads faster than 4s, hide splash earlier
-      setTimeout(() => setShowSplash(false), 500);
+      
+      const elapsedTime = Date.now() - startTime;
+      const remainingTime = Math.max(0, MIN_LOAD_TIME - elapsedTime);
+      
+      setTimeout(() => setShowSplash(false), remainingTime);
     };
 
     init();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setIsAdminLoggedIn(!!session);
-      if (event === 'SIGNED_IN') setCurrentView('admin_dashboard');
-      if (event === 'SIGNED_OUT') setCurrentView('catalog');
+      if (event === 'SIGNED_IN') {
+        setCurrentView('admin_dashboard');
+        loadData(true); // Re-sync data on login
+      }
+      if (event === 'SIGNED_OUT') {
+        setCurrentView('catalog');
+      }
     });
 
     return () => {
-      clearTimeout(splashTimeout);
       subscription.unsubscribe();
     };
   }, [loadData]);
+
+  const handleLogout = async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      // Force UI reset regardless of listener delay
+      setCurrentView('catalog');
+      setIsAdminLoggedIn(false);
+    } catch (err) {
+      console.error("Logout error", err);
+      // Even if error, try to clear UI
+      setCurrentView('catalog');
+    }
+  };
 
   const toggleWishlist = async (id: string) => {
     const isAdded = wishlist.includes(id);
@@ -171,6 +206,7 @@ const App: React.FC = () => {
         onDeleteCoupon={async id => { await db.coupons.delete(id); await loadData(true); }}
         onToggleCoupon={async (id, active) => { await db.coupons.toggleActive(id, active); await loadData(true); }}
         onRefreshData={() => loadData(true)}
+        onLogout={handleLogout}
       />
     );
 

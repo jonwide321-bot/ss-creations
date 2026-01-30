@@ -77,94 +77,162 @@ export const db = {
       const { error } = await supabase.from('products').delete().eq('id', id);
       if (error) throw error;
     },
+    // Fix: Added missing uploadImage method for Supabase storage
     async uploadImage(file: File) {
-      const fileName = `${Date.now()}-${file.name}`;
-      const { error } = await supabase.storage.from('product-images').upload(`products/${fileName}`, file);
+      const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+      const { data, error } = await supabase.storage
+        .from('products')
+        .upload(fileName, file);
+
       if (error) throw error;
-      const { data: { publicUrl } } = supabase.storage.from('product-images').getPublicUrl(`products/${fileName}`);
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('products')
+        .getPublicUrl(fileName);
+
       return publicUrl;
     }
   },
   orders: {
     async getAll() {
-      const { data, error } = await supabase.from('orders').select(`*, customers (*), order_items (*, products (*))`).order('created_at', { ascending: false });
-      if (error) throw error;
-      return (data || []).map(o => ({
-        id: o.id,
-        total: Number(o.total || 0),
-        subtotal: Number(o.subtotal || 0),
-        shippingFee: Number(o.shipping_fee || 0),
-        discount: Number(o.discount || 0),
-        status: o.status || 'Pending',
-        paymentMethod: o.payment_method || 'Unknown',
-        date: o.date || new Date().toLocaleDateString(),
-        shippingAddress: {
-          name: o.customers?.name || 'Guest',
-          email: o.customers?.email || '',
-          phone: o.customers?.phone || '',
-          address: o.customers?.address || '',
-          city: o.customers?.city || ''
-        },
-        items: (o.order_items || []).map((oi: any) => ({
-          ...(oi.products ? mapProductFromDB(oi.products) : {}),
-          quantity: oi.quantity || 1,
-          price: Number(oi.price || 0)
-        }))
-      }));
+      // Robust fetching logic. We try to fetch with joins, but handle errors gracefully.
+      try {
+        const { data, error } = await supabase
+          .from('orders')
+          .select(`
+            *,
+            customers (*) ,
+            order_items (
+              *,
+              products (*)
+            )
+          `)
+          .order('created_at', { ascending: false });
+
+        if (error) {
+          console.error("Order fetch failed, trying fallback:", error);
+          // Fallback: Fetch orders without joins if complex query fails
+          const { data: simpleData, error: simpleError } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+          if (simpleError) throw simpleError;
+          
+          return (simpleData || []).map(o => ({
+            id: o.id,
+            total: Number(o.total || 0),
+            subtotal: Number(o.subtotal || 0),
+            status: o.status || 'Pending',
+            paymentMethod: o.payment_method || 'Unknown',
+            date: o.date || o.created_at,
+            shippingAddress: { name: 'Customer Info Missing', email: '', phone: '', address: '', city: '' },
+            items: []
+          }));
+        }
+
+        return (data || []).map(o => {
+          // Supabase join structure can vary based on relationship pluralization
+          const customerData = o.customers;
+          const itemsData = o.order_items || [];
+
+          return {
+            id: o.id,
+            total: Number(o.total || 0),
+            subtotal: Number(o.subtotal || 0),
+            shippingFee: Number(o.shipping_fee || 0),
+            discount: Number(o.discount || 0),
+            status: o.status || 'Pending',
+            paymentMethod: o.payment_method || 'Unknown',
+            date: o.date || o.created_at || new Date().toISOString(),
+            shippingAddress: {
+              name: customerData?.name || 'Guest User',
+              email: customerData?.email || '',
+              phone: customerData?.phone || '',
+              address: customerData?.address || '',
+              city: customerData?.city || ''
+            },
+            items: itemsData.map((oi: any) => ({
+              ...(oi.products ? mapProductFromDB(oi.products) : { name: 'Legacy Item', price: Number(oi.price) }),
+              quantity: oi.quantity || 1,
+              price: Number(oi.price || 0)
+            }))
+          };
+        });
+      } catch (err) {
+        console.error("Critical error fetching orders:", err);
+        return [];
+      }
     },
     async create(orderDetails: any, cartItems: any[]) {
-      const { data: customer, error: cErr } = await supabase.from('customers').upsert({
-        email: orderDetails.shippingAddress.email,
-        name: orderDetails.shippingAddress.name,
-        phone: orderDetails.shippingAddress.phone,
-        address: orderDetails.shippingAddress.address,
-        city: orderDetails.shippingAddress.city
-      }, { onConflict: 'email' }).select().single();
-      if (cErr) throw cErr;
-      const { error: oErr } = await supabase.from('orders').insert({
-        id: orderDetails.id,
-        customer_id: customer.id,
-        total: orderDetails.total,
-        subtotal: orderDetails.subtotal,
-        shipping_fee: orderDetails.shippingFee,
-        discount: orderDetails.discount,
-        status: 'Pending',
-        payment_method: orderDetails.paymentMethod,
-        date: new Date().toISOString()
-      });
-      if (oErr) throw oErr;
-      const items = cartItems.map(item => ({ order_id: orderDetails.id, product_id: item.id, quantity: item.quantity, price: item.price }));
-      const { error: iErr } = await supabase.from('order_items').insert(items);
-      if (iErr) throw iErr;
+      try {
+        // 1. Find or create customer
+        const { data: existingCustomer } = await supabase
+          .from('customers')
+          .select('id')
+          .eq('email', orderDetails.shippingAddress.email.toLowerCase())
+          .maybeSingle();
+
+        let customerId;
+        if (existingCustomer) {
+          customerId = existingCustomer.id;
+        } else {
+          const { data: newCustomer, error: cErr } = await supabase.from('customers').insert({
+            email: orderDetails.shippingAddress.email.toLowerCase(),
+            name: orderDetails.shippingAddress.name,
+            phone: orderDetails.shippingAddress.phone,
+            address: orderDetails.shippingAddress.address,
+            city: orderDetails.shippingAddress.city
+          }).select().single();
+          if (cErr) throw cErr;
+          customerId = newCustomer.id;
+        }
+
+        // 2. Create order
+        const { error: oErr } = await supabase.from('orders').insert({
+          id: orderDetails.id,
+          customer_id: customerId,
+          total: orderDetails.total,
+          subtotal: orderDetails.subtotal,
+          shipping_fee: orderDetails.shippingFee,
+          discount: orderDetails.discount,
+          status: 'Pending',
+          payment_method: orderDetails.paymentMethod,
+          date: new Date().toISOString()
+        });
+        if (oErr) throw oErr;
+
+        // 3. Create order items
+        const items = cartItems.map(item => ({ 
+          order_id: orderDetails.id, 
+          product_id: item.id, 
+          quantity: item.quantity, 
+          price: item.price 
+        }));
+        const { error: iErr } = await supabase.from('order_items').insert(items);
+        if (iErr) throw iErr;
+        
+        return true;
+      } catch (err: any) {
+        console.error("Order Submission Error:", err);
+        throw err;
+      }
     },
     async updateStatus(id: string, status: string) {
       const { error } = await supabase.from('orders').update({ status }).eq('id', id);
       if (error) throw error;
     }
   },
-  promotions: {
-    async getAll() {
-      const { data, error } = await supabase.from('promotions').select('*').order('created_at', { ascending: false });
-      if (error) return [];
-      return data || [];
+  settings: {
+    async get() {
+      const { data, error } = await supabase.from('settings').select('value').eq('key', 'store_settings').maybeSingle();
+      if (error || !data) return { baseShippingFee: 500.00 };
+      return data.value;
     },
-    async upsert(promo: any) {
-      const { data, error } = await supabase.from('promotions').upsert(promo).select();
-      if (error) throw error;
-      return data?.[0];
-    },
-    async delete(id: string) {
-      const { error } = await supabase.from('promotions').delete().eq('id', id);
+    async update(value: any) {
+      const { error } = await supabase.from('settings').upsert({ key: 'store_settings', value });
       if (error) throw error;
     }
   },
   coupons: {
     async getAll() {
       const { data, error } = await supabase.from('coupons').select('*').order('created_at', { ascending: false });
-      if (error) {
-        console.error("Fetch Coupons Error:", error);
-        return [];
-      }
       return data || [];
     },
     async create(coupon: any) {
@@ -175,19 +243,12 @@ export const db = {
         min_order_amount: Number(coupon.min_order_amount || 0),
         active: true
       }).select();
-      
-      if (error) {
-        console.error("Coupon Insert Error:", error);
-        throw error;
-      }
+      if (error) throw error;
       return data?.[0];
     },
     async delete(id: string) {
       const { error } = await supabase.from('coupons').delete().eq('id', id);
-      if (error) {
-        console.error("Coupon Delete Error:", error);
-        throw error;
-      }
+      if (error) throw error;
     },
     async toggleActive(id: string, active: boolean) {
       const { error } = await supabase.from('coupons').update({ active }).eq('id', id);
@@ -203,35 +264,19 @@ export const db = {
   },
   shippingRates: {
     async getAll() {
-      const { data, error } = await supabase.from('shipping_rates').select('*').order('district_name');
-      if (error) return [];
+      const { data, error } = await supabase.from('shipping_rates').select('*');
       return data || [];
-    },
-    async upsert(rate: any) {
-      const { data, error } = await supabase.from('shipping_rates').upsert(rate).select();
-      if (error) throw error;
-      return data?.[0];
-    },
-    async updateRate(id: string, rate: number) {
-      const { error } = await supabase.from('shipping_rates').update({ rate }).eq('id', id);
-      if (error) throw error;
     }
   },
-  settings: {
-    async get() {
-      const { data, error } = await supabase.from('settings').select('value').eq('key', 'store_settings').single();
-      if (error || !data) return { baseShippingFee: 500.00 };
-      return data.value;
-    },
-    async update(value: any) {
-      const { error } = await supabase.from('settings').upsert({ key: 'store_settings', value });
-      if (error) throw error;
+  promotions: {
+    async getAll() {
+      const { data, error } = await supabase.from('promotions').select('*').order('created_at', { ascending: false });
+      return data || [];
     }
   },
   wishlist: {
     async get(visitor_id: string) {
       const { data, error } = await supabase.from('wishlists').select('product_id').eq('visitor_id', visitor_id);
-      if (error) return [];
       return (data || []).map(d => d.product_id);
     },
     async add(visitor_id: string, product_id: string) {

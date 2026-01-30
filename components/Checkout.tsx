@@ -109,6 +109,7 @@ const Checkout: React.FC<CheckoutProps> = ({ items, coupons, settings, onBack, o
 
       const orderPayload = {
         id: orderId,
+        items: [...items], // Critical fix: items must be included for the success screen
         total,
         subtotal,
         shippingFee,
