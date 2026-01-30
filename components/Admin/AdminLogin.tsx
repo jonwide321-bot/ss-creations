@@ -76,7 +76,7 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onBack }) => {
         <div className="mb-6 p-4 bg-blue-50 border border-blue-100 rounded-2xl flex gap-3">
           <Info className="w-5 h-5 text-blue-500 flex-shrink-0" />
           <p className="text-[10px] text-blue-700 leading-relaxed font-medium">
-            Make sure you have created an admin account in your <b>Supabase Dashboard</b> under Authentication > Users first.
+            Make sure you have created an admin account in your <b>Supabase Dashboard</b> under Authentication &gt; Users first.
           </p>
         </div>
 
