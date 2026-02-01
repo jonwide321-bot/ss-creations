@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Sparkles, Send, Loader2, BrainCircuit } from 'lucide-react';
 import { getGiftSuggestions } from '../services/gemini';
@@ -32,21 +31,25 @@ const GiftFinder: React.FC = () => {
             <Sparkles className="w-4 h-4" />
             AI-Powered Assistant
           </div>
-          <h2 className="text-4xl font-bold text-slate-800 mb-4">Find the Perfect Suggestion</h2>
+          <h2 className="text-4xl font-bold text-slate-800 mb-4 serif">Find the Perfect Suggestion</h2>
           <p className="text-slate-600">Tell our AI who you're buying for, the occasion, and their interests.</p>
         </div>
 
         <form onSubmit={handleSearch} className="relative mb-12">
+          <label htmlFor="gift-finder-input" className="sr-only">Gift criteria (recipient, occasion, interests)</label>
           <input
+            id="gift-finder-input"
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            aria-label="Gift search criteria"
             placeholder="e.g., A birthday gift for my 5 year old niece who loves space..."
             className="w-full pl-6 pr-16 py-5 rounded-2xl bg-white border border-stone-200 shadow-xl focus:ring-2 focus:ring-rose-500 focus:border-transparent outline-none transition-all text-lg"
           />
           <button
             type="submit"
             disabled={loading}
+            aria-label="Search gift suggestions"
             className="absolute right-3 top-3 bottom-3 px-6 bg-rose-500 hover:bg-rose-600 text-white rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}

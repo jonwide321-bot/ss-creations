@@ -1,13 +1,18 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   BarChart3, Package, ShoppingCart, Search, Filter, AlertCircle, Plus, 
   Edit2, LogOut, Loader2, Tag, Trash2, CheckCircle2, Layout, 
   Eye, Save, DollarSign, Calendar, TrendingUp, Clock, User, 
-  MapPin, Phone, Mail, X, Info, Truck, ChevronRight, Globe, Percent, ToggleLeft, ToggleRight
+  MapPin, Phone, Mail, X, Info, Truck, ChevronRight, Globe, Percent, 
+  ToggleLeft, ToggleRight, ArrowUpRight, ArrowDownRight, MoreVertical, Check, 
+  ShoppingBag, RefreshCw, Layers
 } from 'lucide-react';
+import { 
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Legend, BarChart, Bar
+} from 'recharts';
 import Logo from '../Logo';
-import { Product, OrderDetails, OrderStatus, StoreSettings, Coupon, Promotion, ShippingRate } from '../../types';
+import { Product, OrderDetails, OrderStatus, StoreSettings, Coupon, Promotion } from '../../types';
 import ProductModal from './ProductModal';
 import { supabase, db } from '../../lib/supabase';
 import { formatPrice } from '../../lib/utils';
@@ -29,6 +34,8 @@ interface AdminDashboardProps {
   onRefreshData: () => Promise<void>;
   onLogout: () => Promise<void>;
 }
+
+const COLORS = ['#D4AF37', '#f43f5e', '#3b82f6', '#10b981', '#a855f7', '#f59e0b'];
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
   products, orders, coupons, promotions, settings, onUpdateProduct, onAddProduct, onDeleteProduct, onUpdateOrderStatus, onUpdateSettings, onAddCoupon, onDeleteCoupon, onToggleCoupon, onRefreshData, onLogout
@@ -65,7 +72,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       await onLogout();
     } catch (err) {
       console.error("Logout failed", err);
-      // Fallback: if somehow supabase logout fails, we can't do much but try to reload
       window.location.reload();
     }
   };
@@ -75,7 +81,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const totalSales = validOrders.reduce((sum, o) => sum + Number(o.total), 0);
     const pendingCount = orders.filter(o => o.status === 'Pending').length;
     
-    return { revenue: totalSales, ordersCount: orders.length, lowStock: products.filter(p => p.stock < 5).length, pendingCount };
+    // Revenue trend (last 7 days)
+    const last7Days = [...Array(7)].map((_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dayStr = d.toLocaleDateString('en-US', { weekday: 'short' });
+      const dayOrders = validOrders.filter(o => new Date(o.date).toDateString() === d.toDateString());
+      return {
+        name: dayStr,
+        revenue: dayOrders.reduce((sum, o) => sum + Number(o.total), 0),
+        orders: dayOrders.length
+      };
+    }).reverse();
+
+    // Category distribution
+    const catMap = validOrders.reduce((acc: Record<string, number>, order) => {
+      order.items.forEach(item => {
+        acc[item.category] = (acc[item.category] || 0) + (item.price * item.quantity);
+      });
+      return acc;
+    }, {});
+    const categoryData = Object.entries(catMap).map(([name, value]) => ({ name, value }));
+
+    return { 
+      revenue: totalSales, 
+      ordersCount: orders.length, 
+      lowStock: products.filter(p => p.stock < 5).length, 
+      pendingCount,
+      chartData: last7Days,
+      categoryData: categoryData.length > 0 ? categoryData : [{ name: 'None', value: 1 }]
+    };
   }, [orders, products]);
 
   const filteredProducts = useMemo(() => {
@@ -206,8 +241,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={() => onRefreshData()} className="p-4 bg-white border border-stone-200 rounded-2xl hover:bg-stone-50 transition-all shadow-sm group">
-              <CheckCircle2 className="w-5 h-5 text-stone-400 group-hover:text-[#D4AF37] transition-colors" />
+            <button onClick={() => onRefreshData()} className="p-4 bg-white border border-stone-200 rounded-2xl hover:bg-stone-50 transition-all shadow-sm group" title="Refresh Data">
+              <RefreshCw className="w-5 h-5 text-stone-400 group-hover:text-[#D4AF37] transition-colors" />
             </button>
             {activeTab === 'inventory' && (
               <button onClick={() => { setEditingProduct(undefined); setIsModalOpen(true); }} className="px-6 py-4 bg-[#1C1917] text-white rounded-2xl text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 hover:bg-[#D4AF37] transition-all shadow-xl">
@@ -223,28 +258,253 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </header>
 
         {activeTab === 'overview' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-in fade-in duration-500">
-             {[
-                { label: 'Revenue', value: formatPrice(stats.revenue), icon: DollarSign, color: 'text-emerald-500', bg: 'bg-emerald-50' },
-                { label: 'Total Orders', value: stats.ordersCount, icon: ShoppingCart, color: 'text-blue-500', bg: 'bg-blue-50' },
-                { label: 'Pending', value: stats.pendingCount, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-50' },
-                { label: 'Low Stock', value: stats.lowStock, icon: AlertCircle, color: 'text-rose-500', bg: 'bg-rose-50' },
+          <div className="space-y-10 animate-in fade-in duration-700">
+            {/* 1. Enhanced Stat Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {[
+                { label: 'Revenue', value: formatPrice(stats.revenue), icon: DollarSign, color: 'text-emerald-500', bg: 'bg-emerald-50', trend: '+12.5%', isUp: true },
+                { label: 'Total Orders', value: stats.ordersCount, icon: ShoppingCart, color: 'text-blue-500', bg: 'bg-blue-50', trend: '+4.3%', isUp: true },
+                { label: 'Pending', value: stats.pendingCount, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-50', trend: '-2.1%', isUp: false },
+                { label: 'Low Stock', value: stats.lowStock, icon: AlertCircle, color: 'text-rose-500', bg: 'bg-rose-50', trend: '0%', isUp: true },
               ].map((stat, i) => (
-                <div key={i} className="bg-white p-8 rounded-[2.5rem] border border-stone-100 shadow-sm flex items-center gap-6 group hover:shadow-lg transition-all">
-                  <div className={`w-14 h-14 ${stat.bg} ${stat.color} rounded-2xl flex items-center justify-center transition-transform group-hover:rotate-12`}>
-                    <stat.icon className="w-6 h-6" />
+                <div key={i} className="bg-white p-8 rounded-[2.5rem] border border-stone-100 shadow-sm flex flex-col gap-6 group hover:shadow-xl transition-all cursor-pointer relative overflow-hidden">
+                  <div className="flex items-center justify-between z-10">
+                    <div className={`w-14 h-14 ${stat.bg} ${stat.color} rounded-2xl flex items-center justify-center transition-transform group-hover:rotate-12`}>
+                      <stat.icon className="w-6 h-6" />
+                    </div>
+                    <div className={`flex items-center gap-1 text-[10px] font-bold ${stat.isUp ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {stat.isUp ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                      {stat.trend}
+                    </div>
                   </div>
-                  <div>
+                  <div className="z-10">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">{stat.label}</p>
                     <h4 className="text-2xl font-bold text-slate-900">{stat.value}</h4>
                   </div>
+                  {/* Subtle Background Pattern */}
+                  <div className="absolute -bottom-4 -right-4 opacity-[0.03] text-slate-900 group-hover:scale-110 transition-transform duration-700">
+                    <stat.icon className="w-24 h-24" />
+                  </div>
                 </div>
               ))}
+            </div>
+
+            {/* 2. Quick Actions */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <button onClick={() => { setActiveTab('inventory'); setEditingProduct(undefined); setIsModalOpen(true); }} className="bg-[#D4AF37] hover:bg-[#B8860B] text-white rounded-3xl p-6 flex items-center gap-4 transition-all shadow-lg active:scale-95">
+                <Plus className="w-6 h-6" />
+                <span className="font-bold text-[10px] uppercase tracking-widest">New Product</span>
+              </button>
+              <button onClick={() => setActiveTab('orders')} className="bg-white hover:bg-stone-50 border border-stone-100 text-slate-800 rounded-3xl p-6 flex items-center gap-4 transition-all shadow-sm active:scale-95">
+                <Truck className="w-6 h-6 text-blue-500" />
+                <span className="font-bold text-[10px] uppercase tracking-widest">Process Orders</span>
+              </button>
+              <button onClick={() => setActiveTab('coupons')} className="bg-white hover:bg-stone-50 border border-stone-100 text-slate-800 rounded-3xl p-6 flex items-center gap-4 transition-all shadow-sm active:scale-95">
+                <Tag className="w-6 h-6 text-[#D4AF37]" />
+                <span className="font-bold text-[10px] uppercase tracking-widest">Promotions</span>
+              </button>
+              <button onClick={() => setActiveTab('settings')} className="bg-white hover:bg-stone-50 border border-stone-100 text-slate-800 rounded-3xl p-6 flex items-center gap-4 transition-all shadow-sm active:scale-95">
+                <Save className="w-6 h-6 text-emerald-500" />
+                <span className="font-bold text-[10px] uppercase tracking-widest">Site Settings</span>
+              </button>
+            </div>
+
+            {/* 3. Charts & Analytics */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="lg:col-span-2 bg-white p-10 rounded-[3rem] border border-stone-100 shadow-sm">
+                <div className="flex items-center justify-between mb-10">
+                  <h3 className="text-xl font-bold text-slate-800 serif italic">Revenue Pulse</h3>
+                  <div className="flex gap-2 bg-stone-50 p-1.5 rounded-2xl">
+                    <button className="px-4 py-1.5 text-[10px] font-bold rounded-xl bg-white text-[#D4AF37] shadow-sm uppercase">7D</button>
+                    <button className="px-4 py-1.5 text-[10px] font-bold rounded-xl text-stone-400 uppercase">30D</button>
+                  </div>
+                </div>
+                <div className="h-80 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={stats.chartData}>
+                      <defs>
+                        <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#D4AF37" stopOpacity={0.3}/>
+                          <stop offset="95%" stopColor="#D4AF37" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} dy={10} />
+                      <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} tickFormatter={(v) => `Rs.${v/1000}k`} />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#1C1917', border: 'none', borderRadius: '16px', color: '#fff' }}
+                        itemStyle={{ color: '#D4AF37', fontSize: '12px' }}
+                      />
+                      <Area type="monotone" dataKey="revenue" stroke="#D4AF37" strokeWidth={3} fillOpacity={1} fill="url(#colorRevenue)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="bg-white p-10 rounded-[3rem] border border-stone-100 shadow-sm">
+                <h3 className="text-xl font-bold text-slate-800 serif italic mb-10">Sales by Collection</h3>
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={stats.categoryData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {stats.categoryData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#1C1917', border: 'none', borderRadius: '16px', color: '#fff' }}
+                        itemStyle={{ fontSize: '10px' }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="space-y-4 mt-6">
+                  {stats.categoryData.slice(0, 4).map((cat, i) => (
+                    <div key={i} className="flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                        <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
+                        <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide group-hover:text-slate-800 transition-colors">{cat.name}</span>
+                      </div>
+                      <span className="text-[11px] font-bold text-slate-400">{(cat.value / stats.revenue * 100).toFixed(1)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* 4. Recent Activity & Low Stock Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="lg:col-span-2 bg-white rounded-[3rem] border border-stone-100 shadow-sm overflow-hidden">
+                <div className="p-8 border-b border-stone-50 flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-slate-800 serif italic">Latest Transactions</h3>
+                  <button onClick={() => setActiveTab('orders')} className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest hover:underline flex items-center gap-2">
+                    View Ledger <ChevronRight className="w-3 h-3" />
+                  </button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-stone-50/50 text-[9px] uppercase font-bold text-stone-400 tracking-widest border-b border-stone-100">
+                      <tr>
+                        <th className="px-8 py-4">Artifact ID</th>
+                        <th className="px-8 py-4">Client</th>
+                        <th className="px-8 py-4">Value</th>
+                        <th className="px-8 py-4">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-50">
+                      {orders.slice(0, 5).map(o => (
+                        <tr key={o.id} className="hover:bg-stone-50/50 transition-colors cursor-pointer" onClick={() => setSelectedOrder(o)}>
+                          <td className="px-8 py-4 text-xs font-mono font-bold text-slate-800">{o.id}</td>
+                          <td className="px-8 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-7 h-7 bg-stone-100 rounded-full flex items-center justify-center text-[10px] font-bold text-stone-500">
+                                {o.shippingAddress.name.charAt(0)}
+                              </div>
+                              <span className="text-xs font-bold text-slate-700">{o.shippingAddress.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-8 py-4 text-xs font-bold text-[#D4AF37]">{formatPrice(o.total)}</td>
+                          <td className="px-8 py-4">
+                            <span className={`px-3 py-1 rounded-full text-[8px] font-bold uppercase tracking-widest ${getStatusColor(o.status)}`}>
+                              {o.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="space-y-8">
+                <div className="bg-[#1C1917] p-10 rounded-[3rem] shadow-xl text-white">
+                  <h3 className="text-xl font-bold text-[#D4AF37] serif italic mb-8 flex items-center gap-3">
+                    <AlertCircle className="w-5 h-5 text-rose-500" /> Studio Alerts
+                  </h3>
+                  <div className="space-y-6">
+                    {products.filter(p => p.stock < 5).slice(0, 3).length > 0 ? (
+                      products.filter(p => p.stock < 5).slice(0, 3).map(p => (
+                        <div key={p.id} className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10 group hover:bg-white/10 transition-colors">
+                          <div className="flex items-center gap-4">
+                            <img src={p.image} className="w-10 h-10 rounded-xl object-cover" alt="" />
+                            <div>
+                              <p className="text-[11px] font-bold text-stone-100 line-clamp-1">{p.name}</p>
+                              <p className="text-[9px] text-stone-500 uppercase tracking-widest">{p.category}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-lg font-bold text-rose-500">{p.stock}</p>
+                            <p className="text-[8px] text-stone-500 uppercase font-bold">Left</p>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="py-10 text-center">
+                        <Check className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
+                        <p className="text-xs text-stone-400 italic">Inventory levels are optimal.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white p-10 rounded-[3rem] border border-stone-100 shadow-sm">
+                  <h3 className="text-xl font-bold text-slate-800 serif italic mb-8">Activity Feed</h3>
+                  <div className="space-y-8">
+                    {orders.slice(0, 3).map((o, idx) => (
+                      <div key={idx} className="flex gap-6 relative">
+                        {idx !== 2 && <div className="absolute top-8 left-4 bottom-[-32px] w-[1px] bg-stone-100" />}
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 z-10 ${idx === 0 ? 'bg-emerald-50 text-emerald-500' : 'bg-stone-50 text-stone-400'}`}>
+                          {idx === 0 ? <ShoppingBag className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800">Order Recieved</p>
+                          <p className="text-[10px] text-stone-400 mt-1">{o.shippingAddress.name} placed {o.id}</p>
+                          <p className="text-[9px] text-stone-300 font-bold uppercase tracking-widest mt-2">{new Date(o.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
         {activeTab === 'orders' && (
           <div className="space-y-6 animate-in fade-in duration-500">
+            {/* Orders Header with Search */}
+            <div className="flex flex-col sm:flex-row gap-4 bg-white p-6 rounded-[2.5rem] border border-stone-100 shadow-sm">
+               <div className="relative flex-grow">
+                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-300" />
+                 <input 
+                  type="text" 
+                  placeholder="Find by ID or Client..."
+                  className="w-full pl-12 pr-4 py-3 rounded-2xl bg-stone-50 border-none outline-none text-sm font-medium focus:ring-2 focus:ring-[#D4AF37]/50"
+                  value={orderSearch}
+                  onChange={e => setOrderSearch(e.target.value)}
+                 />
+               </div>
+               <select 
+                className="px-6 py-3 rounded-2xl bg-stone-50 border-none outline-none text-sm font-bold uppercase tracking-widest text-slate-500"
+                value={orderStatusFilter}
+                onChange={e => setOrderStatusFilter(e.target.value)}
+               >
+                 <option value="All">All Stages</option>
+                 <option value="Pending">Pending</option>
+                 <option value="Shipped">Shipped</option>
+                 <option value="Delivered">Delivered</option>
+                 <option value="Cancelled">Cancelled</option>
+               </select>
+            </div>
+
             <div className="bg-white rounded-[2.5rem] border border-stone-100 shadow-sm overflow-hidden">
                <div className="overflow-x-auto">
                  <table className="w-full text-left">
@@ -302,6 +562,29 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {activeTab === 'inventory' && (
           <div className="space-y-6 animate-in fade-in duration-500">
+             <div className="flex flex-col sm:flex-row gap-4 bg-white p-6 rounded-[2.5rem] border border-stone-100 shadow-sm">
+               <div className="relative flex-grow">
+                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-300" />
+                 <input 
+                  type="text" 
+                  placeholder="Search masterpieces..."
+                  className="w-full pl-12 pr-4 py-3 rounded-2xl bg-stone-50 border-none outline-none text-sm font-medium focus:ring-2 focus:ring-[#D4AF37]/50"
+                  value={inventorySearch}
+                  onChange={e => setInventorySearch(e.target.value)}
+                 />
+               </div>
+               <select 
+                className="px-6 py-3 rounded-2xl bg-stone-50 border-none outline-none text-sm font-bold uppercase tracking-widest text-slate-500"
+                value={inventoryCategory}
+                onChange={e => setInventoryCategory(e.target.value)}
+               >
+                 <option value="All">All Collections</option>
+                 {Array.from(new Set(products.map(p => p.category))).map(cat => (
+                   <option key={cat} value={cat}>{cat}</option>
+                 ))}
+               </select>
+            </div>
+
              <div className="bg-white rounded-[2.5rem] border border-stone-100 shadow-sm overflow-hidden">
                <div className="overflow-x-auto">
                  <table className="w-full text-left">

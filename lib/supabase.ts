@@ -1,4 +1,3 @@
-
 import { createClient } from '@supabase/supabase-js';
 
 const DEFAULT_URL = 'https://ophglrtxjdjqxoixebzc.supabase.co';
@@ -23,6 +22,78 @@ const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY') || DEFAULT_KEY;
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export const isSupabaseConfigured = () => !!(supabaseUrl && supabaseAnonKey && supabaseAnonKey.length > 20);
+
+/**
+ * ═══════════════════════════════════════════
+   Advanced API Cache Manager (Fixes TTFB)
+   ═══════════════════════════════════════════
+ */
+class APICache {
+  private prefix = 'ss_cache_v3_'; // Version bump to clear old buggy caches
+  private durations = {
+    products: 15 * 60 * 1000,      
+    promotions: 15 * 60 * 1000,    
+    settings: 60 * 60 * 1000,      
+    orders: 30 * 1000,              // 30 seconds for orders (very short)
+    wishlist: 10 * 60 * 1000,      
+    coupons: 30 * 60 * 1000,       
+    shipping: 120 * 60 * 1000      
+  };
+
+  get<T>(key: string): T | null {
+    try {
+      const cached = localStorage.getItem(this.prefix + key);
+      if (!cached) return null;
+      
+      const { data, timestamp, type } = JSON.parse(cached);
+      const duration = this.durations[type as keyof typeof this.durations] || 5 * 60 * 1000;
+      
+      if (Date.now() - timestamp > duration) {
+        return null; // Expired
+      }
+      
+      return data as T;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  set<T>(key: string, data: T, type: keyof typeof this.durations): void {
+    try {
+      const cacheData = {
+        data,
+        timestamp: Date.now(),
+        type
+      };
+      localStorage.setItem(this.prefix + key, JSON.stringify(cacheData));
+    } catch (error) {}
+  }
+
+  invalidate(types: (keyof typeof this.durations)[]): void {
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith(this.prefix)) {
+        try {
+          const cached = localStorage.getItem(key);
+          if (!cached) return;
+          const { type } = JSON.parse(cached);
+          if (types.includes(type)) {
+            localStorage.removeItem(key);
+          }
+        } catch (e) {}
+      }
+    });
+  }
+
+  clearAll() {
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith(this.prefix)) {
+        localStorage.removeItem(key);
+      }
+    });
+  }
+}
+
+const apiCache = new APICache();
 
 const mapProductFromDB = (p: any) => ({
   id: p?.id || 'err-' + Math.random(),
@@ -58,12 +129,52 @@ const mapProductToDB = (p: any) => ({
   detailed_description: p.detailedDescription || p.description || ''
 });
 
+const mapOrderFromDB = (o: any) => {
+  const customerData = o.customers;
+  const itemsData = o.order_items || [];
+
+  return {
+    id: o.id,
+    total: Number(o.total || 0),
+    subtotal: Number(o.subtotal || 0),
+    shippingFee: Number(o.shipping_fee || 0),
+    discount: Number(o.discount || 0),
+    status: o.status || 'Pending',
+    paymentMethod: o.payment_method || 'Unknown',
+    date: o.date || o.created_at || new Date().toISOString(),
+    shippingAddress: {
+      name: customerData?.name || 'Guest User',
+      email: customerData?.email || '',
+      phone: customerData?.phone || '',
+      address: customerData?.address || '',
+      city: customerData?.city || ''
+    },
+    items: itemsData.map((oi: any) => ({
+      ...(oi.products ? mapProductFromDB(oi.products) : { id: oi.product_id, name: 'Item', price: Number(oi.price) }),
+      quantity: oi.quantity || 1,
+      price: Number(oi.price || 0)
+    }))
+  };
+};
+
 export const db = {
   products: {
     async getAll() {
-      const { data, error } = await supabase.from('products').select('*').order('created_at', { ascending: false });
-      if (error) throw error;
-      return (data || []).map(mapProductFromDB);
+      const cached = apiCache.get<any[]>('all_products');
+      
+      const fetchPromise = (async () => {
+        const { data, error } = await supabase.from('products').select('*').order('created_at', { ascending: false });
+        if (error) throw error;
+        apiCache.set('all_products', data, 'products');
+        return (data || []).map(mapProductFromDB);
+      })();
+
+      if (cached) {
+        fetchPromise.catch(console.error);
+        return cached.map(mapProductFromDB);
+      }
+
+      return await fetchPromise;
     },
     async upsert(product: any) {
       const dbData = mapProductToDB(product);
@@ -71,13 +182,15 @@ export const db = {
         ? await supabase.from('products').update(dbData).eq('id', product.id).select()
         : await supabase.from('products').insert(dbData).select();
       if (result.error) throw result.error;
+      
+      apiCache.invalidate(['products']);
       return mapProductFromDB(result.data?.[0]);
     },
     async delete(id: string) {
       const { error } = await supabase.from('products').delete().eq('id', id);
       if (error) throw error;
+      apiCache.invalidate(['products']);
     },
-    // Fix: Added missing uploadImage method for Supabase storage
     async uploadImage(file: File) {
       const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
       const { data, error } = await supabase.storage
@@ -94,75 +207,46 @@ export const db = {
     }
   },
   orders: {
-    async getAll() {
-      // Robust fetching logic. We try to fetch with joins, but handle errors gracefully.
-      try {
-        const { data, error } = await supabase
-          .from('orders')
-          .select(`
-            *,
-            customers (*) ,
-            order_items (
-              *,
-              products (*)
-            )
-          `)
-          .order('created_at', { ascending: false });
-
-        if (error) {
-          console.error("Order fetch failed, trying fallback:", error);
-          // Fallback: Fetch orders without joins if complex query fails
-          const { data: simpleData, error: simpleError } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
-          if (simpleError) throw simpleError;
-          
-          return (simpleData || []).map(o => ({
-            id: o.id,
-            total: Number(o.total || 0),
-            subtotal: Number(o.subtotal || 0),
-            status: o.status || 'Pending',
-            paymentMethod: o.payment_method || 'Unknown',
-            date: o.date || o.created_at,
-            shippingAddress: { name: 'Customer Info Missing', email: '', phone: '', address: '', city: '' },
-            items: []
-          }));
+    async getAll(forceRefresh = false) {
+      if (!forceRefresh) {
+        const cached = apiCache.get<any[]>('all_orders');
+        if (cached) {
+          // Trigger BG refresh for orders too
+          this.fetchAndCacheOrders().catch(console.error);
+          return cached;
         }
-
-        return (data || []).map(o => {
-          // Supabase join structure can vary based on relationship pluralization
-          const customerData = o.customers;
-          const itemsData = o.order_items || [];
-
-          return {
-            id: o.id,
-            total: Number(o.total || 0),
-            subtotal: Number(o.subtotal || 0),
-            shippingFee: Number(o.shipping_fee || 0),
-            discount: Number(o.discount || 0),
-            status: o.status || 'Pending',
-            paymentMethod: o.payment_method || 'Unknown',
-            date: o.date || o.created_at || new Date().toISOString(),
-            shippingAddress: {
-              name: customerData?.name || 'Guest User',
-              email: customerData?.email || '',
-              phone: customerData?.phone || '',
-              address: customerData?.address || '',
-              city: customerData?.city || ''
-            },
-            items: itemsData.map((oi: any) => ({
-              ...(oi.products ? mapProductFromDB(oi.products) : { name: 'Legacy Item', price: Number(oi.price) }),
-              quantity: oi.quantity || 1,
-              price: Number(oi.price || 0)
-            }))
-          };
-        });
-      } catch (err) {
-        console.error("Critical error fetching orders:", err);
-        return [];
+      } else {
+        apiCache.invalidate(['orders']);
       }
+
+      return await this.fetchAndCacheOrders();
     },
+
+    async fetchAndCacheOrders() {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          customers (*) ,
+          order_items (
+            *,
+            products (*)
+          )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error("Supabase Orders Error:", error);
+        throw error;
+      }
+
+      const mapped = (data || []).map(mapOrderFromDB);
+      apiCache.set('all_orders', mapped, 'orders');
+      return mapped;
+    },
+
     async create(orderDetails: any, cartItems: any[]) {
       try {
-        // 1. Find or create customer
         const { data: existingCustomer } = await supabase
           .from('customers')
           .select('id')
@@ -184,7 +268,6 @@ export const db = {
           customerId = newCustomer.id;
         }
 
-        // 2. Create order
         const { error: oErr } = await supabase.from('orders').insert({
           id: orderDetails.id,
           customer_id: customerId,
@@ -198,7 +281,6 @@ export const db = {
         });
         if (oErr) throw oErr;
 
-        // 3. Create order items
         const items = cartItems.map(item => ({ 
           order_id: orderDetails.id, 
           product_id: item.id, 
@@ -208,6 +290,7 @@ export const db = {
         const { error: iErr } = await supabase.from('order_items').insert(items);
         if (iErr) throw iErr;
         
+        apiCache.invalidate(['orders']);
         return true;
       } catch (err: any) {
         console.error("Order Submission Error:", err);
@@ -217,23 +300,34 @@ export const db = {
     async updateStatus(id: string, status: string) {
       const { error } = await supabase.from('orders').update({ status }).eq('id', id);
       if (error) throw error;
+      apiCache.invalidate(['orders']);
     }
   },
   settings: {
     async get() {
+      const cached = apiCache.get<any>('store_settings');
+      if (cached) return cached;
+
       const { data, error } = await supabase.from('settings').select('value').eq('key', 'store_settings').maybeSingle();
-      if (error || !data) return { baseShippingFee: 500.00 };
-      return data.value;
+      const val = (error || !data) ? { baseShippingFee: 500.00 } : data.value;
+      apiCache.set('store_settings', val, 'settings');
+      return val;
     },
     async update(value: any) {
       const { error } = await supabase.from('settings').upsert({ key: 'store_settings', value });
       if (error) throw error;
+      apiCache.invalidate(['settings']);
     }
   },
   coupons: {
     async getAll() {
+      const cached = apiCache.get<any[]>('all_coupons');
+      if (cached) return cached;
+
       const { data, error } = await supabase.from('coupons').select('*').order('created_at', { ascending: false });
-      return data || [];
+      const val = data || [];
+      apiCache.set('all_coupons', val, 'coupons');
+      return val;
     },
     async create(coupon: any) {
       const { data, error } = await supabase.from('coupons').insert({
@@ -244,15 +338,18 @@ export const db = {
         active: true
       }).select();
       if (error) throw error;
+      apiCache.invalidate(['coupons']);
       return data?.[0];
     },
     async delete(id: string) {
       const { error } = await supabase.from('coupons').delete().eq('id', id);
       if (error) throw error;
+      apiCache.invalidate(['coupons']);
     },
     async toggleActive(id: string, active: boolean) {
       const { error } = await supabase.from('coupons').update({ active }).eq('id', id);
       if (error) throw error;
+      apiCache.invalidate(['coupons']);
     },
     async validate(code: string, subtotal: number) {
       const { data: coupon, error } = await supabase.from('coupons').select('*').eq('code', code.trim().toUpperCase()).eq('active', true).maybeSingle();
@@ -264,26 +361,43 @@ export const db = {
   },
   shippingRates: {
     async getAll() {
+      const cached = apiCache.get<any[]>('shipping_rates');
+      if (cached) return cached;
+
       const { data, error } = await supabase.from('shipping_rates').select('*');
-      return data || [];
+      const val = data || [];
+      apiCache.set('shipping_rates', val, 'shipping');
+      return val;
     }
   },
   promotions: {
     async getAll() {
+      const cached = apiCache.get<any[]>('all_promotions');
+      if (cached) return cached;
+
       const { data, error } = await supabase.from('promotions').select('*').order('created_at', { ascending: false });
-      return data || [];
+      const val = data || [];
+      apiCache.set('all_promotions', val, 'promotions');
+      return val;
     }
   },
   wishlist: {
     async get(visitor_id: string) {
+      const cached = apiCache.get<string[]>(`wishlist_${visitor_id}`);
+      if (cached) return cached;
+
       const { data, error } = await supabase.from('wishlists').select('product_id').eq('visitor_id', visitor_id);
-      return (data || []).map(d => d.product_id);
+      const val = (data || []).map(d => d.product_id);
+      apiCache.set(`wishlist_${visitor_id}`, val, 'wishlist');
+      return val;
     },
     async add(visitor_id: string, product_id: string) {
       await supabase.from('wishlists').insert({ visitor_id, product_id });
+      apiCache.invalidate(['wishlist']);
     },
     async remove(visitor_id: string, product_id: string) {
       await supabase.from('wishlists').delete().eq('visitor_id', visitor_id).eq('product_id', product_id);
+      apiCache.invalidate(['wishlist']);
     }
   }
 };

@@ -1,0 +1,77 @@
+/* 
+ * ═══════════════════════════════════════════
+   Global Typography & Rendering 
+   ═══════════════════════════════════════════
+ */
+body {
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    transition: background-color 0.5s ease, color 0.5s ease;
+}
+
+h1, h2, h3, h4, h5, h6, .serif {
+    font-family: 'Cormorant Garamond', serif;
+}
+
+/* 
+ * ═══════════════════════════════════════════
+   Custom Scrollbar Support
+   ═══════════════════════════════════════════
+ */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #D4AF37 #FCFBF7;
+}
+
+.dark * {
+    scrollbar-color: #D4AF37 #0F0E0D;
+}
+
+::-webkit-scrollbar { 
+    width: 8px; 
+}
+
+::-webkit-scrollbar-track { 
+    background: #FCFBF7; 
+}
+
+.dark ::-webkit-scrollbar-track { 
+    background: #0F0E0D; 
+}
+
+::-webkit-scrollbar-thumb { 
+    background: #D4AF37; 
+    border-radius: 20px; 
+}
+
+/* 
+ * ═══════════════════════════════════════════
+   Accessibility: Focus States
+   ═══════════════════════════════════════════
+ */
+button:focus-visible, a:focus-visible {
+    outline: 2px solid #D4AF37;
+    outline-offset: 4px;
+}
+
+/* 
+ * ═══════════════════════════════════════════
+   Animations 
+   ═══════════════════════════════════════════
+ */
+@keyframes loading-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: loading-shimmer 1.5s infinite;
+}
+
+.dark .skeleton {
+  background: linear-gradient(90deg, #1c1917 25%, #262626 50%, #1c1917 75%);
+}
